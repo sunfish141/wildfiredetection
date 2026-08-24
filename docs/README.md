@@ -6,17 +6,39 @@ The notebook excludes FIRMS detections with TI4 brightness below 305 only from t
 
 ## Spread-forecasting data contract
 
-The current notebook is a fire-detection and weather-enrichment prototype; it does not yet produce fire-spread labels or predictions. The proposed U.S. and Canada collection, provenance, feature, and label contract is documented in:
+The notebook is a fire-detection and weather-enrichment prototype; it does not
+itself produce model labels or predictions. The repository also contains a
+manifest-selected FIRMS/FEDS **no-weather** candidate-table builder and an
+uploadable release exporter. The current retained source archive supports the
+coherent range 2026-05-31 through 2026-08-10; the requested wider summer range
+must be recollected and rebuilt before it can be claimed.
+The U.S./Canada collection and training contract is documented in:
 
 - [Architecture and collection contract](architecture.md)
 - [Feature and label map](feature-map.md)
 - [Collection runbook](collecting-data.md)
+- [First tabular training pipeline](training-pipeline.md)
+- [Uploadable candidate dataset](uploadable-dataset.md)
+- [Pipeline handoff](handoff.md)
 - [20 GB local-dataset decision](adr/0001-bounded-20gb-local-dataset.md)
+- [1 km / 12-hour weak-label-baseline decision](adr/0002-first-1km-12hour-weak-label-baseline.md)
 - [Change log](change-log.md)
 
 The local collection root is `data/` (ignored by Git): immutable provider bytes live under `data/raw/`, lossless normalized JSON Lines under `data/normalized/`, and append-only raw/coverage manifests under `data/manifests/`. The notebook and `collect_firms` implement this path for FIRMS.
 
-The local package has a hard **20,000,000,000-byte** limit, including all existing CSV exports and caches. It is therefore a compact training package, not a complete native archive. It currently contains unfiltered FIRMS evidence, WFIGS reference perimeters, CWFIS active-fire record history, Collection 2 VIIRS inventory evidence, an HRDPS retrieval plan, compact ETOPO terrain blocks, and one immutable CEC NALCMS land-cover source ZIP for each of Canada and the United States. Those NALCMS ZIPs are source evidence, not model-ready fuel features. Paired VIIRS pixels and issued forecast values remain reserved-but-uncollected allocations. The policy and per-category usage report are [documented in ADR 0001](adr/0001-bounded-20gb-local-dataset.md) and enforced before compact collectors persist new artifacts. Existing files are counted and never silently evicted.
+The local package has a hard **20,000,000,000-byte** limit, including all
+existing CSV exports and caches. It is therefore a compact training package,
+not a complete native archive. It currently contains unfiltered FIRMS
+evidence, FEDS satellite-weak perimeter snapshots/derived positives, WFIGS
+reference perimeters, CWFIS active-fire record history, Collection 2 VIIRS
+inventory evidence, an HRDPS retrieval plan, compact ETOPO terrain blocks, and
+one immutable CEC NALCMS land-cover source ZIP for each of Canada and the
+United States. Those NALCMS ZIPs are source evidence, not model-ready fuel
+features. Paired VIIRS pixels and issued forecast values remain
+reserved-but-uncollected allocations. The policy and per-category usage report
+are [documented in ADR 0001](adr/0001-bounded-20gb-local-dataset.md) and
+enforced before compact collectors persist new artifacts. Existing files are
+counted and never silently evicted.
 
 The current L2 command is deliberately **inventory-only by default** under this policy. `VNP14IMG`/`VJ114IMG`/`VJ214IMG` provide fire mask and algorithm QA; matching `VNP03IMG`/`VJ103IMG`/`VJ203IMG` products provide geolocation. Downloading the former alone is not a complete observation and requires an explicit legacy override outside the 20 GB policy.
 
@@ -64,6 +86,10 @@ To inspect the whole-data budget, run:
 PYTHONPATH=src .venv/bin/python -m wildfire_data.inspect_storage_budget --data-root data
 ```
 
-For the compact paired-L2 plan and safe inventory command, follow [Step 9 of the collection runbook](collecting-data.md#9-inventory-viirs-level-2-and-plan-paired-cutouts).
+For the safe VIIRS L2 inventory command, follow [Step 8 of the collection runbook](collecting-data.md#step-8-save-the-viirs-level-2-inventory).
 
-For terrain and bounded land-cover source collection, follow [Step 12](collecting-data.md#12-collect-static-terrain-for-the-firms-context) and [Step 13](collecting-data.md#13-archive-nalcms-land-cover-source-evidence).
+For terrain, positive-only training-view, and bounded land-cover source
+collection, follow [Step 10](collecting-data.md#step-10-collect-terrain-source-blocks),
+[Step 11](collecting-data.md#step-11-build-the-positive-only-tabular-training-view),
+[Step 12](collecting-data.md#step-12-archive-canada-land-cover-source-evidence),
+and [Step 13](collecting-data.md#step-13-archive-us-land-cover-source-evidence).

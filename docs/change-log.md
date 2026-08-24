@@ -1,5 +1,38 @@
 # Change log
 
+## 2026-08-24
+
+- Added the manifest-selected no-weather FIRMS/FEDS candidate-table pipeline,
+  notebook runner, chunk-merge support, and self-contained gzip JSONL release
+  exporter. It publishes an atomic completed candidate-view manifest and never
+  globs historical immutable artifacts.
+- Built and verified the retained 2026-05-31 through 2026-08-10 release:
+  305,528 candidate rows (19,528 supported weak positives and 286,000
+  FIRMS-seeded weak-negative proxies), plus 11,848 unscored FIRMS-uncovered
+  positives. The release includes schema, inventory, and SHA-256 checksums.
+- Explicitly excluded Open-Meteo exports from model inputs because they are
+  retrospective visualization caches without issued-forecast availability
+  provenance. The release remains a no-weather weak-label research baseline.
+
+## 2026-08-20
+
+- Added a hard FIRMS product/day coverage gate to archive-backed training-row
+  assembly. The 24-hour lookback required one leading 2026-05-30 FIRMS
+  collection day; the completed three-product collection added 2,043 source
+  rows with no retry gaps. The rebuilt view contains 31,376 positive rows and
+  is published through a completed-build manifest, so interrupted immutable
+  artifacts cannot be read as a partial dataset.
+- Hardened the tabular baseline's time split: FEDS rows can now group by
+  `source_snapshot_time`, keeping all cell-local cutoffs from one source
+  snapshot on the same side of the chronological holdout. The persisted
+  baseline contract is versioned accordingly.
+- Accepted [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md): the first experiment uses a canonical 1 km ESRI:102008 lattice, a 12-hour horizon, CONUS + Canada scope, FEDS satellite-weak positive labels, and a chronological tabular histogram-gradient-boosting baseline. Alaska is excluded pending its own FEDS time-alignment policy.
+- Added a resumable, quota-admitted NASA FEDS perimeter collector and a FEDS perimeter-difference label builder. The first 2026-05-31 through 2026-08-10 FEDS capture recorded 12,148 provider features as immutable evidence. FEDS remains explicitly weak satellite evidence, not operational perimeter history or independent truth from FIRMS.
+- Hardened FEDS snapshot provenance around the provider primary-key timestamp and retained the provider time field alongside it. Added a no-network raw-response replayer so the already archived range can be rebuilt into primary-key snapshot partitions without recollection. Label anchors use a documented per-cell local-solar-to-UTC estimate rather than falsely treating every FEDS snapshot as one global UTC observation time.
+- Added the fixed grid contract, availability-gated FIRMS cell/3×3 feature builder, on-demand ETOPO cell-centre sampler, positive-only training-table assembler, and leakage-aware chronological tabular baseline component. Added the deterministic FIRMS-only candidate/weak-negative sampler: it retains proxy/unknown semantics and unscored positives rather than inventing clear/no-burn evidence. Candidate feature-view publication and an end-to-end binary-train command remain pending.
+- Added the explicit [training pipeline](training-pipeline.md) and rewrote the collection guide as command → exact data produced. Both documents make the weather boundary clear: HRDPS is only a retrieval plan today, so the baseline has no weather or wind-direction feature yet.
+- Amended [ADR 0001](adr/0001-bounded-20gb-local-dataset.md) to admit compact FEDS weak-label evidence while keeping the whole data tree under the 20 GB contract.
+
 ## 2026-08-18
 
 - Amended [ADR 0001](adr/0001-bounded-20gb-local-dataset.md) after adversarial storage reviews: retained paired-L2 capacity is 3.0 GB, static capacity is 5.5 GB, and derived-view capacity is 1.5 GB. This preserves a compact L2 reserve while admitting the highest-value static evidence that can be collected without misleading historical reconstruction.

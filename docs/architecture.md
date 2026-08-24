@@ -4,9 +4,17 @@
 
 This contract defines the data needed to forecast where an existing wildfire is likely to newly burn next in the United States and Canada.
 
-The prediction unit is a local grid or H3 cell at a stated forecast horizon. The service returns calibrated probabilities and the corresponding cell-centroid latitude/longitude coordinates, rather than treating arbitrary point coordinates as direct regression targets.
+The first prediction unit is a fixed 1 km North America Albers equal-area cell
+(ESRI:102008) at a 12-hour horizon. The service returns calibrated
+probabilities and the corresponding cell-centroid latitude/longitude
+coordinates, rather than treating arbitrary point coordinates as direct
+regression targets.
 
-The present notebook is one input stream: NASA FIRMS detections enriched with selected hourly weather values. It is not a fire perimeter, incident, progression, or label-building system.
+The notebook remains one presentation input stream: NASA FIRMS detections
+enriched with selected hourly weather values. It is not the operational weather
+source. The repository also has a separate FEDS weak-label path, a completed
+FIRMS-only candidate-table builder, and a self-contained release exporter. A
+future trained model remains a research baseline, not an operational forecast.
 
 ## Planned collection layout
 
@@ -14,11 +22,22 @@ The planned package layout places environment configuration in config/.env, pinn
 
 ## Current repository implementation
 
-The repository implements the collection foundation, a bounded-storage policy, WFIGS reference-perimeter and CWFIS incident-context collectors, a CMR-first VIIRS inventory collector, compact ETOPO terrain collection, and bounded NALCMS source-archive collection. Revision-history, compact paired-L2, issued-forecast, and categorical land-cover feature adapters remain to be added:
+The repository implements the collection foundation, bounded-storage policy,
+FEDS satellite-weak labels, WFIGS reference-perimeter and CWFIS
+incident-context collectors, a CMR-first VIIRS inventory collector, compact
+ETOPO terrain collection, and bounded NALCMS source-archive collection.
+Compact paired-L2, issued-forecast values, and categorical land-cover features
+remain to be added:
 
 - `src/wildfire_data/data_archive.py` stores immutable gzip-compressed raw bytes by SHA-256, writes secret-redacted manifests, and records append-only coverage outcomes.
 - `src/wildfire_data/firms_collection.py` archives each successful or failed FIRMS daily request; successful CSV rows are normalized losslessly before the legacy brightness-filtered view is created.
 - `src/wildfire_data/collect_firms.py` is the non-notebook entry point for durable, daily FIRMS range collection and continues across failed days while recording retryable coverage gaps.
+- src/wildfire_data/feds_collection.py and src/wildfire_data/collect_feds.py archive public NASA FEDS perimeter response pages for each requested 12-hour source interval. src/wildfire_data/rebuild_feds_normalization.py can replay retained raw pages without an API call to normalize by the timestamp embedded in each source primary key. The evidence is weak_satellite, defaults to CONUS + Canada, and is not represented as an operational perimeter revision history.
+- src/wildfire_data/feds_labels.py and src/wildfire_data/build_feds_labels.py derive positive-only 1 km cells from consecutive FEDS perimeter differences. The source time, cell-local-solar-to-UTC estimate, overlap fraction, raw IDs, and weak-label tier remain in the label record.
+- src/wildfire_data/training_grid.py defines the canonical ESRI:102008 1 km lattice and cell-centroid conversion. src/wildfire_data/fire_state_features.py builds availability-gated FIRMS centre/3x3 state summaries, src/wildfire_data/terrain_features.py samples retained ETOPO blocks at a cell centre, and src/wildfire_data/tabular_baseline.py provides the chronological histogram-gradient-boosting baseline.
+- src/wildfire_data/training_dataset.py and src/wildfire_data/build_training_dataset.py persist a bounded positive-only FEDS training view with cutoff-safe FIRMS/terrain features, raw-artifact lineage, and explicit weather missingness. They require terminal FIRMS product/day coverage through each usable feature interval and expose rows only through a completed-build manifest, so missing or interrupted partitions cannot read as zero evidence.
+- src/wildfire_data/candidate_sampling.py creates deterministic FIRMS-only candidate cells from cutoff-eligible detections. It retains FEDS positives within candidate support, records non-positive candidates only as explicit weak-negative proxies, and separately reports positives with no FIRMS candidate support. It does not claim a clear/no-burn observation mask.
+- `src/wildfire_data/candidate_dataset.py` and `build_candidate_dataset.py` turn exactly one completed positive-view manifest into cutoff-safe FIRMS/terrain candidate rows and atomically publish a completed candidate-view manifest. `export_candidate_dataset.py` materializes that one manifest as a checksum-protected upload directory; it never globs historical artifacts. The first completed view covers 2026-05-31 through 2026-08-10 and excludes retrospective Open-Meteo exports.
 - `src/wildfire_data/storage_budget.py` and `config/storage_budget.json` account for every byte under `data/`, reject supported writes that would exceed the whole or category caps, and write a scored storage report without changing source records.
 - `src/wildfire_data/wfigs_collection.py` and `src/wildfire_data/collect_wfigs.py` archive paginated WFIGS GeoJSON responses and normalize their reference perimeters with source/timing provenance. This backfill is a `final_reference` label tier; it is not a substitute for historical revision snapshots.
 - `src/wildfire_data/cwfis_active_fires.py` and `src/wildfire_data/collect_cwfis_active_fires.py` archive CWFIS active-fire record versions in deterministic `record_start,id` order. `record_start`/`record_end` are retained as Canadian operational incident context, never converted into a perimeter/spread label.
@@ -111,7 +130,7 @@ Capture changing operational sources now because their revision histories are of
 
 Backfill stable reference products separately: U.S. WFIGS/IFPH and FODR, MTBS, Canadian NFDB and NBAC, and MODIS/VIIRS burned-area products. These products improve historical coverage and validation, but usually do not provide operational progression timestamps.
 
-The collection catalog deliberately lists source *categories* and expected cadence without embedding external credentials or silently starting downloads. FIRMS, WFIGS reference perimeters, CMR L2 inventory, ETOPO terrain, and NALCMS source archives are source-specific implementations; progression, paired-cutout, issued-forecast, and categorical static-feature adapters will use the same immutable evidence, quota-admission, and coverage-ledger pattern.
+The collection catalog deliberately lists source *categories* and expected cadence without embedding external credentials or silently starting downloads. FIRMS, FEDS perimeters, WFIGS reference perimeters, CMR L2 inventory, ETOPO terrain, and NALCMS source archives are source-specific implementations; paired-cutout, issued-forecast, categorical static-feature, and training-table adapters will use the same immutable evidence, quota-admission, and coverage-ledger pattern.
 
 ## Quality, coverage, and label tiers
 
@@ -123,7 +142,12 @@ Assign every perimeter or label one of these tiers:
 - Final reference: post-season or final mapped extent.
 - Satellite-derived: active-fire or burned-area algorithm output.
 
-Satellite-derived products such as FEDS and Fire M3 are valuable weak labels, but can share input observations with FIRMS. They are not independent ground truth and must not use information after the as-of time in the feature set.
+Satellite-derived products such as FEDS and Fire M3 are valuable weak labels,
+but can share input observations with FIRMS. They are not independent ground
+truth and must not use information after the as-of time in the feature set.
+The first FEDS builder emits positives only; missing or unchanged FEDS cells
+cannot be treated as clear/no-burn negatives without a later candidate and
+observation-coverage policy.
 
 ## Evaluation boundary
 

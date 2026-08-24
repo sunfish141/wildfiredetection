@@ -1,0 +1,27 @@
+[
+  {
+    "bytes": 2019,
+    "relative_path": "README.md",
+    "sha256": "9f3186077ed5e8ceb60ba704a12b7078377fa95a52510ff9d070d460521a6c25"
+  },
+  {
+    "bytes": 162824246,
+    "relative_path": "candidate_examples.jsonl.gz",
+    "sha256": "30b780c3523b962a4db2d2853a178b2849fa988690ff254b6c52d97444b216ce"
+  },
+  {
+    "bytes": 2055,
+    "relative_path": "dataset_manifest.json",
+    "sha256": "459b9fdab5d4313571eafaef190d55ef8f93a1261fbe3afd9c70011866b0b02f"
+  },
+  {
+    "bytes": 1155,
+    "relative_path": "schema.json",
+    "sha256": "616a2b1aea71e6d866f1c17e9cadf1f94347be078a751bcd9c5d411ff784b236"
+  },
+  {
+    "bytes": 1851867,
+    "relative_path": "unscored_positives.jsonl.gz",
+    "sha256": "eb07db9295fac347af360bb76b7be6d700a044ed260e25a5b3498af0f7643544"
+  }
+]

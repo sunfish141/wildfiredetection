@@ -1,0 +1,37 @@
+{
+  "candidate_dataset_build_version": "firms-feds-weak-candidate-tabular-1km-12h/v1",
+  "format": "gzip-compressed JSON Lines",
+  "model_feature_columns": [
+    "firms_center_has_detection",
+    "firms_center_detection_count",
+    "firms_center_bright_ti4_max",
+    "firms_center_bright_ti4_mean",
+    "firms_center_platform_count",
+    "firms_center_hours_since_last_detection",
+    "firms_local_3x3_has_detection",
+    "firms_local_3x3_detection_count",
+    "firms_local_3x3_bright_ti4_max",
+    "firms_local_3x3_bright_ti4_mean",
+    "firms_local_3x3_platform_count",
+    "firms_local_3x3_hours_since_last_detection",
+    "firms_local_3x3_active_cell_count",
+    "terrain_valid",
+    "terrain_elevation_m",
+    "terrain_slope_degrees",
+    "terrain_aspect_defined",
+    "terrain_aspect_sin",
+    "terrain_aspect_cos"
+  ],
+  "not_model_features": [
+    "all timestamps",
+    "all identifiers",
+    "all source/raw lineage",
+    "all label metadata",
+    "candidate-selection metadata",
+    "weather missingness metadata",
+    "dataset_split"
+  ],
+  "schema_version": 1,
+  "split_column": "dataset_split",
+  "target_column": "target_newly_burned_12h"
+}

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-08-16; amended — 2026-08-18.
+Accepted — 2026-08-16; amended — 2026-08-18 and 2026-08-20.
 
 ## Context
 
@@ -82,7 +82,7 @@ The priority order was reviewed adversarially for label value, leakage risk, sou
 | WFIGS Year-to-Date perimeters | Admit as reference only | 2,019 U.S. geometries for 2026-05-31 through 2026-08-10 were collected. They are `final_reference` and cannot be treated as a historical operational revision sequence. |
 | CWFIS active fires | Admit as incident context | The new CWFIF layer preserves `record_start`/`record_end` per agency-record version. The requested range yielded 10,136 compact Canadian context records. They provide IDs, status, size, and source timing, never a spread geometry label. |
 | CWFIS Fire M3 perimeters | Reserve, do not backfill as snapshots | The examined Fire M3 July query contained geometry whose source fields reached August, so it is not safe to call it a July as-issued snapshot. Begin daily captures for future ranges or use a dated provider archive; never backfill an invented progression series. Fire M3 hotspot points are excluded as redundant with FIRMS/VIIRS. |
-| NASA FEDS NRT | Reserve, currently unavailable | The public NRT service returned an unavailable-service error during collection review. Record it as unavailable rather than converting it into an empty no-fire interval. |
+| NASA FEDS NRT perimeters | Admit as compact satellite-weak label evidence | The public service is now captured as immutable response pages for the requested range (12,148 returned provider features in the first capture). It is not an operational perimeter history: source identity/timestamp provenance is retained, FEDS-to-FIRMS dependence is explicit, labels are positive-only, and Alaska remains outside the first local-solar time-aligned dataset. |
 | VIIRS L2 fire mask/QA + geolocation | Reserve for paired cutouts | CMR inventory is retained, but the compact pair adapter and Earthdata access are required before any L2 pixel is admitted. Full fire files alone are about 19.56 GB and fail both the pairing and storage rules. |
 | HRDPS issued forecast | Admit plan, defer values pending a compact extractor | A scored plan for the still-public 2026-07-17 through 2026-08-10 slice stores 56,497 candidates and 3,200 selected tiles under the weather allocation. It uses only FIRMS evidence available under a conservative three-hour latency policy. It is not weather data and explicitly marks historical publication availability as uncertain. |
 | HRRR issued forecast | Reserve | NOAA's archive is persistent, unlike the time-limited HRDPS source. Defer download until the same compact extractor has been validated. |

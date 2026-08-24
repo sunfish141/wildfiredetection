@@ -1,59 +1,91 @@
 # Feature and label map
 
-## Contract
+## First-model contract
 
-Each training example represents an incident-local area at an as-of time t and a forecast horizon h. Its output is a probability that each candidate cell newly burns during the interval from t to t+h.
+Each row represents one canonical 1 km North America Albers equal-area cell
+(ESRI:102008) at a real UTC feature cutoff. Its target is whether the cell is
+observed to newly enter a FEDS perimeter in the following 12 hours. Output is a
+probability plus that cell's centroid latitude/longitude—not a direct
+regression to an arbitrary point.
 
-The table below describes required source categories. It deliberately separates input evidence from labels and final validation data.
+The first scope is CONUS + Canada. FEDS has a local-solar source-time
+convention, so each FEDS-derived row retains its native time and the documented
+cell-local-solar-to-UTC anchor estimate. Alaska is excluded until that
+alignment is separately validated.
 
-| Family | Raw and normalized content | Eligibility at time t | Quality requirement |
+| Family | Data used now | Eligibility at the cutoff | Important limit |
 | --- | --- | --- | --- |
-| Fire state | Unfiltered FIRMS active-fire records; platform, acquisition time, TI4/TI5, FRP, confidence, scan/track, day/night, and source quality. Operational perimeter versions and incident links when available. | Only records published by t. | Keep all raw detections; any TI4 threshold is a downstream policy, not a collection filter. Preserve duplicate, missing, and low-confidence evidence. |
-| Weather and fire environment | Temperature, humidity, precipitation, wind U/V direction and speed, gusts, antecedent moisture, drought/fire-weather indices, and forecast model/run metadata. | Observed variables must be available by t; horizon variables must come from a run issued by t. | Store valid time separately from issue time. The current HRDPS candidate CSV is a scored retrieval plan, not weather values; its historical publication timing is explicitly uncertain. |
-| Static landscape | ETOPO 2022 v1 source subsets plus compact elevation, slope, and aspect; versioned fuel/land-cover, canopy, water, roads, and built-area sources. NALCMS is currently retained as raw source evidence only, not feature values. | Static version valid at t. | Version rasters and record spatial resolution, CRS, source date, and resampling method. Never average categorical class IDs during aggregation. |
-| Observation coverage | Satellite swath/overpass, cloud or smoke mask, valid-pixel status, source latency, and data outages. | Coverage information known by t or for the label observation interval. | Under the 20 GB policy, retain selected *paired* SNPP/NOAA-20/NOAA-21 fire-mask/QA and geolocation cutouts, not complete swaths. Distinguish no observation from observed-not-burning when a later derived mask is built. |
-| Incident operations | Incident ID, discovery time, agency, fire status, size, containment/control status, map method, and suppression context when available. | Operational report was published by t. | Preserve native IDs and source update times; do not backfill final incident values into earlier samples. |
+| Fire state | Unfiltered FIRMS detections: platform, acquisition time, TI4/TI5, FRP, confidence, scan/track, day/night, and source fields | Acquisition time plus the declared availability lag must be no later than the cutoff | Keep all raw detections; the 305 K TI4 rule is a downstream field, not a collection filter. |
+| Static terrain | Retained ETOPO elevation, slope, and downhill aspect sampled at the 1 km cell centre | Static source version retained for the package | It is a sampled source pixel, not a dense 1 km terrain cache. |
+| Weak spread target | Consecutive FEDS perimeter snapshots plus FIRMS candidate support | Source snapshots t and t + 12 h must both be retained and paired for the same fire | Positive cells are `weak_satellite`; target=0 is only a FIRMS-seeded `weak_negative_proxy`, never confirmed clear/no-burn. |
+| Weather | HRDPS candidate/retrieval plan | None: no forecast measurements are stored | No temperature, humidity, wind, gust, or wind-direction feature is available yet. |
+| Observation coverage | VIIRS Level-2 inventory | None: paired fire-mask/QA + geolocation cutouts are not stored | Cannot prove clear/no-fire or produce coverage-aware negatives yet. |
+| Land cover/fuels | Canada/U.S. NALCMS source archives | None: no categorical aggregation is implemented | Never average land-cover class IDs. |
+| Incident/reference | CWFIS incident context and WFIGS final/reference perimeters | Only source facts available by cutoff | They validate/match context; they are not 12-hour spread targets. |
 
-## Label map
+## Label tiers
 
-| Label tier | Definition | Primary use | Caveat |
+| Label tier | Definition | Use | Restriction |
 | --- | --- | --- | --- |
-| Operational progression | Difference between two time-stamped agency perimeter versions for the same incident. | Preferred supervised spread label. | Mapping time and geometry quality vary; retain map method and capture time. |
-| Satellite progression | New FEDS pixels/active-front geometry or a Fire M3 progression estimate after t. | Weak labels where operational geometry is absent. | Derived from active-fire detections, potentially overlapping FIRMS inputs; label provenance must be visible. |
-| Burn-date raster | MODIS or VIIRS cell burn date, uncertainty, QA, and valid-observation bounds. | Daily historical weak labels and coverage masks. | Monthly retrospective product; burn date is estimated, not an operational update. |
-| Final extent | WFIGS/IFPH, MTBS, NFDB, NBAC, or certified final perimeter. | Validation, incident end state, and long-history reference. | Do not infer within-event progression from a final polygon alone. |
+| Operational progression | Difference between time-stamped agency perimeter versions | Preferred future supervised target | Not available in the current backfill. |
+| Satellite weak progression | FEDS perimeter(t + 12 h) minus FEDS perimeter(t), rasterized to 1 km cells | First tabular-baseline positives | Keep source IDs/time alignment and weak_satellite tier. Never infer zeros from absent cells. |
+| Burn-date raster | MODIS/VIIRS burn date with uncertainty/QA | Future historical weak labels/coverage | Retrospective, not operational. |
+| Final extent | WFIGS/IFPH, MTBS, NFDB, NBAC, certified final perimeter | End-state validation/reference | Do not reconstruct spread timing from a final polygon. |
 
-## Minimum model-ready record
+## Current FIRMS feature fields
 
-A derived incident-time cell record must include:
+The first feature builder produces, separately for the target cell and its
+3 km × 3 km neighbourhood:
 
-- Incident and source IDs plus the source snapshot IDs used.
-- As-of time, horizon, cell identifier, centroid, CRS, and spatial resolution.
-- A feature cutoff timestamp and weather issue/run plus valid times.
-- Observation coverage status for the input and label intervals.
-- Label value, label tier, label time interval, and label-quality flags.
-- Upstream raw/normalized schema and transformation versions.
+- detection present/count;
+- maximum and mean TI4 brightness;
+- number of platforms;
+- hours since the most recent eligible detection; and
+- active-cell count for the neighbourhood.
 
-## U.S. and Canada source map
+Each record also preserves feature-build version, cutoff, lookback start,
+availability lag, and latest eligible acquisition time. It must not use
+ingested-at or future FEDS information.
 
-| Area | Operational collection | Historical/final reference |
-| --- | --- | --- |
-| United States | NIFC WFIGS current perimeter and IRWIN incident snapshots; selected state/agency feeds when they provide better timing. | WFIGS full history/IFPH, FODR, MTBS, and burned-area products. |
-| Canada | CWFIS active fires and Fire M3 progression; provincial or territorial perimeter feeds where available. | CNFDB agency points/polygons, NBAC, and burned-area products. |
+## Terrain feature fields
 
-The boundary is U.S. and Canada. A separate contract is required before adding Mexico or other regions, including source authority, licensing, incident IDs, cadence, and coverage assessment.
+The terrain sampler returns:
 
-## Output contract
+- terrain-valid and coverage status;
+- elevation in metres;
+- slope in degrees;
+- downhill aspect encoded as sine/cosine plus an aspect-defined flag; and
+- source-block/pixel/sampling provenance.
 
-Predictions must carry:
+## Minimum training-row lineage
 
-- As-of time and horizon.
-- Cell geometry and centroid latitude/longitude.
-- Probability, rank, calibration version, and uncertainty or coverage status.
-- Feature and model version IDs.
+Every persisted training candidate must include:
 
-This makes a list of predicted latitude/longitude locations traceable to the spatial cells, time horizon, and evidence used to produce it.
+- example ID, cell ID, cell-centre latitude/longitude, cutoff, horizon, and
+  target-end time;
+- upstream raw/normalized IDs and transformation versions;
+- feature availability policy and observation/label-coverage status;
+- label value, tier, source time interval, time-alignment method, and quality
+  flags;
+- deterministic candidate/negative-selection reason; and
+- split/model/feature versions once fitted.
 
-## Implementation status
+## Current implementation boundary
 
-The FIRMS raw/normalized path, a 20 GB admission policy, WFIGS reference-perimeter collection, CWFIS historical active-fire incident-context collection, the issued-at forecast record contract, a scored compact weather-tile planner, a Collection 2 VIIRS L2 inventory collector, and ETOPO terrain collection are implemented. The terrain blocks are on the source’s WGS84 15-arc-second grid: `elevation_m` is `int16` metres (`-32768` unavailable), `slope_degrees_x2` is `uint8` in 0.5° increments, and `aspect_degrees_x2` is downhill clockwise-from-north in 2° increments (`255` undefined). NALCMS country releases are retained with 30 m/19-class provenance only; a target-grid categorical feature cube has not been created. The CWFIS records preserve agency-report intervals and statuses but are not spread labels. The HRDPS plan records every selected and capped candidate using only FIRMS evidence available before the run under a conservative latency policy; it does not contain forecast values. The L2 inventory identifies the active-fire side of each required source pair but does not yet create paired geolocated cutouts or labels. WFIGS reference data validates end state but does not supply historical progression snapshots. Progression products and compact forecast-value tiles remain unimplemented. Until those inputs and perimeter snapshots are collected, the repository must not describe a model as predicting physical wildfire spread.
+The canonical grid, FEDS collection/positive-label builder, leakage-gated
+FIRMS feature builder, ETOPO sampler, positive-only training-table builder,
+chronological tabular baseline, FIRMS-only candidate sampler, candidate-view
+publisher, and release exporter are implemented. The completed candidate view
+makes target=0 rows only as named weak-negative proxies and preserves positives
+without FIRMS candidate support as unscored diagnostics. The first retained
+range is 2026-05-31 through 2026-08-10. Even with the completed wiring:
+
+- no absent FEDS label may become a zero;
+- no notebook Open-Meteo CSV may become a weather feature;
+- no WFIGS final perimeter may become earlier fire state; and
+- the model must be described as a no-weather, satellite-weak baseline rather
+  than an operational wildfire-spread predictor.
+
+See [the training pipeline](training-pipeline.md) and
+[ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md) for the fixed
+first-model choices.

@@ -1,0 +1,45 @@
+{
+  "candidate_build_id": "76e075f405f24287ba9531bea436cbe5",
+  "candidate_build_manifest_relative_path": "manifests/candidate-dataset-builds/2026/08/24/040059951477_76e075f405f24287ba9531bea436cbe5.json",
+  "candidate_dataset_build_version": "firms-feds-weak-candidate-tabular-1km-12h/v1",
+  "candidate_row_count": 305528,
+  "kind": "wildfire-spread-candidate-dataset-release",
+  "limitations": [
+    "target=0 means a FIRMS-seeded weak-negative proxy, not observed clear/no-burn.",
+    "FEDS weak labels and FIRMS features share satellite evidence and are not independent ground truth.",
+    "FIRMS-uncovered positives are retained in unscored_positives.jsonl.gz and excluded from the candidate table.",
+    "Only source snapshots represented by FEDS-positive labels are included; no all-zero FEDS window is invented.",
+    "Weather is absent. Open-Meteo exports are retrospective visualization data and are excluded.",
+    "The chronological split groups whole source snapshots but is not incident-held-out or region-held-out validation."
+  ],
+  "model_feature_columns": [
+    "firms_center_has_detection",
+    "firms_center_detection_count",
+    "firms_center_bright_ti4_max",
+    "firms_center_bright_ti4_mean",
+    "firms_center_platform_count",
+    "firms_center_hours_since_last_detection",
+    "firms_local_3x3_has_detection",
+    "firms_local_3x3_detection_count",
+    "firms_local_3x3_bright_ti4_max",
+    "firms_local_3x3_bright_ti4_mean",
+    "firms_local_3x3_platform_count",
+    "firms_local_3x3_hours_since_last_detection",
+    "firms_local_3x3_active_cell_count",
+    "terrain_valid",
+    "terrain_elevation_m",
+    "terrain_slope_degrees",
+    "terrain_aspect_defined",
+    "terrain_aspect_sin",
+    "terrain_aspect_cos"
+  ],
+  "schema_version": 1,
+  "source_snapshot_end_date": "2026-08-10",
+  "source_snapshot_start_date": "2026-05-31",
+  "unscored_positive_count": 11848,
+  "weather": {
+    "available": false,
+    "policy": "exclude-open-meteo-retrospective-exports/v1",
+    "status": "unavailable-no-issued-forecast-features"
+  }
+}
