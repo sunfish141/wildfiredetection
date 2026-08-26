@@ -69,3 +69,28 @@ class ForecastCollectionTests(unittest.TestCase):
 
         self.assertEqual(result.coverage.status, CoverageStatus.FAILED)
         self.assertEqual(result.normalized_artifacts, ())
+
+    def test_preserves_a_successful_response_when_provider_parsing_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = archive_forecast_response(
+                directory,
+                payload=b'{"hourly": "unparseable for this adapter"}',
+                measurements=[],
+                provider="Open-Meteo",
+                product="Single Runs",
+                model="ecmwf_ifs",
+                model_run_at="2026-07-26T00:00:00Z",
+                source_uri="https://single-runs-api.open-meteo.com/v1/forecast",
+                coverage_start="2026-07-26T04:00:00Z",
+                coverage_end="2026-07-26T16:00:00Z",
+                region="United States and Canada",
+                response_status_code=200,
+                availability_at="2026-07-26T04:00:00Z",
+                availability_basis="collector-captured-single-run-response/v1",
+                parser_error="ValueError: unsupported wind speed unit",
+            )
+            raw_bytes = result.raw_artifact.artifact_path.read_bytes()
+
+        self.assertEqual(result.coverage.status, CoverageStatus.FAILED)
+        self.assertEqual(result.normalized_artifacts, ())
+        self.assertTrue(raw_bytes)

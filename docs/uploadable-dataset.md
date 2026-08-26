@@ -33,8 +33,9 @@ The release directory contains:
 
 ## Reproduce or rebuild
 
-Run the notebook [build_uploadable_dataset.ipynb](../notebooks/build_uploadable_dataset.ipynb)
-from the repository root, or run:
+For the new weather-bearing rebuild, use
+[wildfire_firms_analysis.ipynb](../wildfire_firms_analysis.ipynb) from the
+repository root. To reproduce the past no-weather release, run:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m wildfire_data.build_candidate_dataset \
@@ -61,9 +62,11 @@ listed digest.
 
 ## Scope and limitations
 
-- Weather is deliberately absent. The existing Open-Meteo files are
-  retrospective visualization caches with no forecast run, issue/publication,
-  or cutoff-availability provenance.
+- Weather is deliberately absent from this immutable past release. No forward
+  forecast capture with explicit model/run, immutable raw response,
+  candidate-cell/tile mapping, and captured availability provenance was made
+  for it. Later collection cannot alter this release, although a newly built
+  range may include retrospective historical-weather analysis features.
 - `target=0` is not observed clear/no-burn; it is a capped, deterministic
   FIRMS-seeded weak-negative proxy. Use it only as a first research baseline.
 - FEDS labels and FIRMS features share satellite evidence, so the labels are
@@ -75,9 +78,24 @@ listed digest.
 
 ## Extending to the requested summer
 
-The retained source archive cannot honestly produce a no-weather data set for
+The retained source archive cannot honestly produce the requested data set for
 2026-05-11 through 2026-08-22 yet. Before requesting that range, collect and
 verify FIRMS for 2026-05-10 through 2026-08-22 and FEDS snapshots for
 2026-05-11 through 2026-08-23. Then rebuild FEDS labels, terrain blocks, the
 positive view, and the candidate view. The date guard in the builder prevents
 mixing a longer request with the current shorter manifest.
+
+Backfill weather for the new candidate tiles and each row's UTC hourly
+prediction anchor through the [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
+with `models=ecmwf_ifs`. Retain raw responses, tile/candidate mapping, the
+model, valid hour, retrieval time, and a `historical_analysis` feature mode.
+`open_meteo_historical.backfill_open_meteo_historical_weather` requires and
+records the exact completed base candidate manifest, then writes the immutable
+backfill manifest; only a complete manifest can be joined to that same base
+manifest by
+`weather_candidate_dataset.build_weather_candidate_dataset` and exported as a
+new weather-bearing release. The base candidate view remains unchanged. This
+produces a retrospective weather-analysis dataset, not a reconstructed
+as-issued-forecast dataset. The optional Open-Meteo Single Runs workflow
+continues to support a distinct future operational-forecast experiment with
+model-run and captured-availability provenance.

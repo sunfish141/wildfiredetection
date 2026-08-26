@@ -162,7 +162,12 @@ def category_for_relative_path(relative_path: str) -> str:
         (
             "raw/noaa-hrrr/",
             "raw/eccc-hrdps/",
+            "raw/open-meteo-single-runs/",
+            "raw/open-meteo-historical-weather/",
             "normalized/forecast-weather/",
+            "normalized/open-meteo-forecast-tile-assignments/",
+            "normalized/historical-weather/",
+            "normalized/open-meteo-historical-weather-tile-assignments/",
             "weather/",
         ),
     ):

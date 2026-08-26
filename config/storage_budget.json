@@ -30,7 +30,7 @@
       "cap_bytes": 5000000000,
       "priority_score": 85,
       "pinned": true,
-      "retention": "Keep issued HRRR/HRDPS fire-context tiles and source metadata for a fixed, predeclared variable and lead-time set."
+      "retention": "Keep Open-Meteo historical weather and optional issued Single Runs fire-context tiles, raw source responses, candidate-cell mappings, and source metadata for a fixed variable and lead-time set."
     },
     {
       "key": "static_cell_features",

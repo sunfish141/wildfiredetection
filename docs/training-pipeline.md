@@ -26,12 +26,12 @@ cell.
 
 ```text
 FIRMS detections ── availability gate ──> FIRMS-only candidate cells + 1 km features ─┐
-                                                                                       ├─> candidate row ─> tabular baseline
-ETOPO terrain blocks ── cell-centre sample ──> elevation / slope / aspect ────────┘
+Historical ECMWF IFS ── tile + hourly-anchor join ──> retrospective weather features ─┼─> candidate row ─> tabular baseline
+ETOPO terrain blocks ── cell-centre sample ──> elevation / slope / aspect ─────────────┘
 
 FEDS snapshots(t) + FEDS snapshots(t+12 h) ──> 1 km newly-burned positives
 
-Issued forecast weather ──> not collected yet; no weather feature is joined today
+Optional issued forecast weather ──> separate forward-only operational experiment
 ```
 
 `FEDS` labels share satellite evidence with FIRMS and are therefore not
@@ -77,6 +77,14 @@ time-alignment method.
    only as `weak_negative_proxy` and puts FIRMS-uncovered positives in a
    separate diagnostic stream. `export_candidate_dataset.py` creates the
    checksum-protected upload directory from that manifest alone.
+9. `open_meteo_historical.py` reads a completed base candidate view, plans
+   compact candidate weather tiles, and captures rate-limited hourly Open-Meteo
+   Historical Weather API ECMWF IFS values per candidate date. It writes raw
+   responses, mappings, and a complete-or-partial immutable backfill manifest.
+10. `weather_candidate_dataset.py` refuses an incomplete backfill, joins each
+    base row only to its mapped tile and UTC hour at or before its anchor, and
+    writes a separate immutable weather-bearing candidate view and export. It
+    does not modify the base no-weather view.
 
 ## What to run to create the positive-only training view
 
@@ -88,8 +96,9 @@ Follow the collection commands in this order:
 4. [Build FEDS labels](collecting-data.md#step-5-build-feds-weak-positive-labels-at-1-km-and-12-hours) — weak positives.
 5. [Collect terrain](collecting-data.md#step-10-collect-terrain-source-blocks) — static terrain values.
 6. [Build the positive-only view](collecting-data.md#step-11-build-the-positive-only-tabular-training-view) — joined, lineage-rich positive rows.
-7. [Build the uploadable candidate view](collecting-data.md#step-11a-build-the-uploadable-no-weather-candidate-view) — binary weak-label rows and release.
-8. [Audit the cap](collecting-data.md#step-14-audit-the-finished-local-package) — make sure the full data tree remains under 20 GB.
+7. [Build the base candidate view](collecting-data.md#step-11a-build-a-candidate-view-current-release-command) — binary weak-label rows and immutable spine.
+8. [Backfill and join historical weather](collecting-data.md#step-11b-backfill-historical-weather-and-publish-a-weather-bearing-view) — ECMWF IFS tile/hour features and a separate uploadable view.
+9. [Audit the cap](collecting-data.md#step-14-audit-the-finished-local-package) — make sure the full data tree remains under 20 GB.
 
 WFIGS and CWFIS collection add validation and incident context, but neither
 creates the initial 12-hour target. The Level-2 inventory and NALCMS archives
@@ -115,27 +124,50 @@ It has a whole-source-snapshot chronological split and an explicit numeric
 feature allowlist. Load only the manifest-selected rows, pass that allowlist to
 `train_tabular_baseline`, and use `split_group_column="source_snapshot_time"`.
 
-Do not use absent FEDS labels as zeros, use `ingested_at` as a feature, join
-final WFIGS perimeters as earlier state, or train on notebook
-`open_meteo_weather_*.csv` files.
+Do not use absent FEDS labels as zeros, use `ingested_at` as a feature, or join
+final WFIGS perimeters as earlier state. Historical weather is permitted only
+through the contracted, archived Open-Meteo Historical Weather API/ECMWF IFS
+path and must remain explicitly marked as retrospective analysis; do not
+substitute an unversioned reanalysis or latest-endpoint lookup.
 
 ## Weather and wind direction
 
-Weather is **not in the first table yet**. The checked-in HRDPS artifact is a
-candidate/retrieval plan, not forecast measurements. It has no temperature,
-humidity, precipitation, wind speed, wind direction, or gust values.
+Weather is absent only from the completed 2026-05-31 through 2026-08-10
+release. The 2026-05-11 through 2026-08-22 rebuild should backfill the
+[Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
+with `models=ecmwf_ifs` at every planned candidate tile and each row's hourly
+weather anchor. `floor_weather_hour` derives the feature's `weather_observed_at`
+by flooring the UTC prediction cutoff to the start of the hour, so a feature
+never uses a weather hour after the cutoff.
 
-The future issued-forecast extractor must retain, for every weather value:
+The compact request cover defaults to a 10 km maximum candidate-to-requested-
+tile distance before the provider's weather-grid snap. This is a deliberate
+spatial approximation, not 1 km meteorology; each row retains the mapping and
+distance. The backfill and join require the same immutable base candidate
+manifest identity.
 
-- grid/tile identifier and variable;
-- model run/issue/publication time;
-- valid time and retrieval time; and
-- the availability decision at the row's as-of cutoff.
+Every historical-analysis measurement must retain:
 
-Wind direction should be represented as provider U/V components (and, if
-needed, derived `sin(direction)`/`cos(direction)`), rather than an unwrapped
-0–360° scalar. Until such issued-at values are retained, the baseline is an
-explicit no-weather ablation—not an operational weather-aware forecast.
+- `historical_analysis` feature mode, provider/model, grid/tile identifier,
+  candidate-cell mapping, variable, units, and valid hour;
+- immutable raw-response artifact ID, retrieval time, request range, and the
+  deterministic weather-anchor alignment rule; and
+- a join decision showing that the tile and valid hour match the candidate row.
+
+The mapping must include every selected candidate cell, not just positive
+FIRMS/FEDS examples, so target=0 weak-negative proxies use the same feature
+contract. Wind direction should be retained as provider U/V components (and,
+if needed, derived `sin(direction)`/`cos(direction)`), rather than an
+unwrapped 0–360° scalar. The rate-limited collector paces calls, retries
+ordinary transient failures, honours a 429 cooldown, and pauses after two
+consecutive 429 responses.
+
+Historical ECMWF IFS values describe retrospective conditions for offline
+training analysis; they are not a reconstructed forecast and must not support
+an operational as-of claim. For that separate experiment, the optional
+forward Open-Meteo Single Runs capture retains an explicit model/run, raw
+response, captured availability timestamp, and only values valid after that
+availability time.
 
 ## Acceptance criteria for the first assembled table
 
@@ -148,7 +180,9 @@ Before fitting the baseline, verify that every row has:
   cutoff, plus the completed training-view manifest that selected the row;
 - `weak_satellite` target=1 or explicitly named `weak_negative_proxy` target=0
   tier, plus a label-observability field;
-- no evidence made available after the cutoff;
+- no operational feature made available after the cutoff; a
+  `historical_analysis` weather feature may be retrieved later, but its valid
+  hour must match the documented hourly anchor at or before the cutoff;
 - a deterministic candidate/negative-selection reason; and
 - a time-ordered train/validation split grouped by source snapshot, with no
   duplicated example ID.

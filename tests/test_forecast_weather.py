@@ -61,6 +61,32 @@ class ForecastWeatherTests(unittest.TestCase):
 
         self.assertEqual(available, [old])
 
+    def test_uses_captured_availability_when_a_provider_publication_time_is_unknown(self):
+        captured = self._record(
+            published_at=None,
+            availability_at="2026-07-20T00:50:00Z",
+            availability_basis="collector-captured-single-run-response/v1",
+        )
+
+        available = forecasts_available_at(
+            [captured], anchor_at="2026-07-20T01:00:00Z"
+        )
+
+        self.assertEqual(available, [captured])
+        self.assertNotIn("published_at", captured)
+        self.assertEqual(
+            captured["availability_basis"], "collector-captured-single-run-response/v1"
+        )
+
+    def test_excludes_a_forecast_value_that_is_not_after_the_prediction_cutoff(self):
+        current = self._record(measurement=self._measurement(valid_at="2026-07-20T01:00:00Z"))
+
+        available = forecasts_available_at(
+            [current], anchor_at="2026-07-20T01:00:00Z"
+        )
+
+        self.assertEqual(available, [])
+
     def test_selects_the_latest_known_forecast_for_each_value(self):
         older = self._record(
             model_run_at="2026-07-20T00:00:00Z",

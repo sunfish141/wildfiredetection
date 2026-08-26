@@ -6,11 +6,12 @@ the current FEDS *positive-only* weak labels into one row per canonical 1 km /
 samples retained terrain.  It does **not** manufacture negative labels or
 weather values.
 
-Issued forecast values need a native-grid adapter with run/publication/valid
-time provenance before they can become model inputs.  Until then every row
-records explicit weather missingness.  In particular, legacy Open-Meteo cache
-and CSV exports are intentionally not read here: they cannot demonstrate what
-an operational model knew at the prediction cutoff.
+Issued forecast values need a native-grid adapter with explicit model/run,
+captured availability, valid-time, and candidate-cell mapping provenance before
+they can become model inputs. Until then every row records explicit weather
+missingness. This no-weather builder intentionally does not read weather data:
+the current release has no contemporaneously captured forecasts eligible at its
+prediction cutoffs.
 """
 
 from __future__ import annotations

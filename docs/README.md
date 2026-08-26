@@ -1,17 +1,15 @@
 # Wildfire Detection Starter
 
-This workspace contains a Jupyter notebook for pulling near-real-time fire detections from the NASA FIRMS API and visualizing them on a scatter plot. Each successful notebook collection now archives the exact unfiltered FIRMS response and writes a lossless normalized record set before creating the filtered weather-enrichment view.
-
-The notebook excludes FIRMS detections with TI4 brightness below 305 only from the weather/map view. The raw archive retains those rows and every other FIRMS field, so a later model can use a different threshold or feature set without recollecting.
+This workspace contains a Jupyter notebook for pulling near-real-time fire detections from the NASA FIRMS API. It also defines two weather paths: a retrospective Open-Meteo Historical Weather API backfill for training analysis and an optional live Open-Meteo Single Runs capture for issued-forecast research. Each successful FIRMS collection archives the exact unfiltered response and writes a lossless normalized record set. The source archive retains every FIRMS field, so a later model can choose a different threshold or feature set without recollecting.
 
 ## Spread-forecasting data contract
 
-The notebook is a fire-detection and weather-enrichment prototype; it does not
+The notebook is a fire-detection and weather-collection tool; it does not
 itself produce model labels or predictions. The repository also contains a
-manifest-selected FIRMS/FEDS **no-weather** candidate-table builder and an
-uploadable release exporter. The current retained source archive supports the
-coherent range 2026-05-31 through 2026-08-10; the requested wider summer range
-must be recollected and rebuilt before it can be claimed.
+manifest-selected FIRMS/FEDS candidate-table builder and an uploadable release
+exporter. The current retained source archive supports the coherent range
+2026-05-31 through 2026-08-10; the requested wider summer range must be
+recollected and rebuilt before it can be claimed.
 The U.S./Canada collection and training contract is documented in:
 
 - [Architecture and collection contract](architecture.md)
@@ -26,8 +24,8 @@ The U.S./Canada collection and training contract is documented in:
 
 The local collection root is `data/` (ignored by Git): immutable provider bytes live under `data/raw/`, lossless normalized JSON Lines under `data/normalized/`, and append-only raw/coverage manifests under `data/manifests/`. The notebook and `collect_firms` implement this path for FIRMS.
 
-The local package has a hard **20,000,000,000-byte** limit, including all
-existing CSV exports and caches. It is therefore a compact training package,
+The local package has a hard **20,000,000,000-byte** limit, including every
+pre-existing retained file. It is therefore a compact training package,
 not a complete native archive. It currently contains unfiltered FIRMS
 evidence, FEDS satellite-weak perimeter snapshots/derived positives, WFIGS
 reference perimeters, CWFIS active-fire record history, Collection 2 VIIRS
@@ -42,23 +40,66 @@ counted and never silently evicted.
 
 The current L2 command is deliberately **inventory-only by default** under this policy. `VNP14IMG`/`VJ114IMG`/`VJ214IMG` provide fire mask and algorithm QA; matching `VNP03IMG`/`VJ103IMG`/`VJ203IMG` products provide geolocation. Downloading the former alone is not a complete observation and requires an explicit legacy override outside the 20 GB policy.
 
-`open_meteo_weather_*.csv` remains a notebook cache/export for visualization. It is not a reproducible issued-at forecast archive; use `src/wildfire_data/forecast_weather.py` records for operational forecast data.
+The existing HRDPS plan is still only a bounded candidate plan, not weather
+measurements. The completed 2026-05-31 through 2026-08-10 release has no
+weather values; that is a property of that past release, not the contract for
+the next historical rebuild.
 
-The repository now also stores a compact HRDPS candidate plan for 2026-07-17 through 2026-08-10. It contains scored, selected and capped fire-context tiles—not weather values—and keeps the historical forecast-publication uncertainty visible until a value-tile extractor is used.
+## Historical weather backfill and optional forward capture
 
-## Weather lookup behaviour
+For the 2026-05-11 through 2026-08-22 historical rebuild, backfill hourly
+weather from the [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
+with the pinned ECMWF IFS model (`ecmwf_ifs`). Pass one completed base candidate
+manifest to the backfill; it records that manifest's path, build ID, and content
+hash before requesting each retained tile for the range needed by its candidate
+rows. Join a tile value only to the row's deterministic UTC hourly weather
+anchor: floor the row's prediction cutoff to the start of its hour, never
+round into a later hour. The tile mapping must cover all selected candidate
+cells, including `weak_negative_proxy` target=0 cells, not just detection
+points or positive labels. The default compact cover may place a request up to
+10 km from a 1 km candidate centre before Open-Meteo snaps it to its weather
+grid; the candidate-to-request distance and returned grid location are retained.
 
-The notebook selects a deterministic subset of input fire locations that keeps every detection within 2 km of a selected weather source. It converts coordinates to WGS84 Earth-Centered, Earth-Fixed (ECEF) metres and uses a KD-tree to identify nearby locations. This bounded-time selection does not attempt a globally minimum source count.
+This is a **retrospective weather-analysis** feature: it describes conditions
+for offline training analysis after the event. Retain the model, requested
+tile, raw response, retrieval time, valid hour, and time-alignment rule, and
+label the feature mode `historical_analysis`. It must never be presented as a
+reconstructed issued forecast or as evidence that the weather value was known
+at the historical prediction cutoff.
 
-The notebook first displays the consolidated selected-source table and saves the planned source/hour lookups to `data/weather/open_meteo_weather_requests.csv`, without making a network request. It keeps a separate fire-to-source mapping so weather can later be attached to every original detection. Its following cell fetches weather once per selected source and UTC day, rather than once per fire hour.
+`src/wildfire_data/open_meteo_single_run.py` remains available for optional
+forward forecast capture. Before enabling it, the operator
+must set one explicit Open-Meteo model and exact model-run timestamp in UTC.
+The collector requests that single run rather than an undated latest-forecast
+view.
 
-Each successful batch is atomically checkpointed to `data/weather/open_meteo_weather_cache.csv`, so rerunning after an interruption fetches only missing lookups. The lookup paces individual source/day calls at 600 per minute. If Open-Meteo returns HTTP 429, it waits at least 90 seconds (or longer when instructed by `Retry-After`) and retries the same batch. When complete, the notebook saves the enriched detections to a date-labelled file under `data/exports/`, such as `fires_with_weather_2026-07-26_to_2026-07-29.csv`; this label always represents the queried coverage window, even if no fire occurs on a boundary date. Rows are ordered by oldest acquisition time and then nearest weather source.
+The notebook expands newly archived FIRMS evidence into the same candidate
+cells used by the candidate policy, including cells that later become
+`weak_negative_proxy` target=0 rows. It deterministically assigns those cells
+to bounded forecast tiles, saves the assignment mapping, and requests only
+forecast times after the successful response's captured availability time.
+Each admitted response is immutable raw evidence; normalized measurements keep
+the provider/model, requested run, returned grid/tile, valid time, capture
+availability time, raw-artifact ID, and mapping lineage. The mapping records
+the FIRMS detection IDs, source raw-artifact IDs, and latest acquisition time
+that seeded each candidate cell. A model run timestamp is not treated as proof
+that the run was already available: the successful captured response supplies
+that availability evidence.
 
-After two consecutive HTTP 429 responses for a batch, the weather fetch pauses gracefully instead of retrying indefinitely. Completed batches remain checkpointed, the FIRMS range is not advanced, and the notebook's `weather-resume` cell resumes only the remaining lookups.
+The rate limit is intentionally retained for both weather paths. The default
+pacing is 600 location units per minute, normal transient failures are
+retried, and HTTP 429 waits at least 90 seconds or the longer `Retry-After`
+interval. After two consecutive 429 responses, the run pauses gracefully so
+already archived batches remain available and the final 429 response is
+recorded as failed coverage. Pass a historical backfill's partial manifest as
+`--resume-manifest` to publish a new manifest that reuses completed dates and
+retries the unfinished date; forward Single Runs remain separate immutable
+capture attempts.
 
-Before each weather fetch, the cache is rewritten to retain only entries belonging to the current FIRMS range; the request manifest is overwritten too. This bounds both `open_meteo_*.csv` files to the active range while still allowing an interrupted range to resume.
-
-FIRMS collection ranges persist in `data/state/firms_collection_range_state.json`. The notebook collects four inclusive days at a time and moves backward from the last successfully exported range; date arithmetic continues correctly across months and years. If no state exists yet, it seeds the next range from the oldest date-labelled weather export.
+The planned FIRMS/FEDS rebuild spans **2026-05-11 through 2026-08-22**. It is
+expected to include the retrospective ECMWF IFS weather-analysis features
+above. The separately captured Single Runs artifacts remain the only weather
+source eligible for an operational, issued-forecast as-of experiment.
 
 ## Setup
 

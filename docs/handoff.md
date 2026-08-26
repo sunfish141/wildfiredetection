@@ -6,10 +6,11 @@ features, or training behavior.
 
 ## Goal and current boundary
 
-The product takes currently available wildfire evidence—ultimately FIRMS
-locations/TI4 and issued weather—and returns 1 km cells where fire is likely
-to spread in the next 12 hours. Cell centroids provide the output
-latitude/longitude.
+The product takes wildfire evidence—FIRMS locations/TI4 plus weather—and
+returns 1 km cells where fire is likely to spread in the next 12 hours. Cell
+centroids provide the output latitude/longitude. Historical training analysis
+uses retrospective weather; a separate optional path captures issued forecasts
+for future operational experiments.
 
 The repository has a completed **no-weather weak-label candidate dataset**,
 not a trained operational binary spread predictor. It contains FIRMS-supported
@@ -27,7 +28,7 @@ weather-aware forecast or a verified clear/no-burn dataset.
 | FEDS time | The authoritative snapshot timestamp is embedded in the provider primary key. `t` is not substituted as the snapshot identity. A source snapshot becomes a documented per-cell local-solar-to-UTC cutoff estimate. |
 | Current fire features | Unfiltered FIRMS from SNPP, NOAA-20, and NOAA-21. Use a 24-hour lookback and conservative 3-hour availability lag. Preserve all source fields; the 305 K TI4 threshold is not a collection filter. |
 | Static feature | Sample retained ETOPO elevation, slope, and aspect at the 1 km cell centre. NALCMS is source evidence only, not a feature yet. |
-| Weather | Not in the current table. HRDPS is a retrieval plan, and notebook Open-Meteo files are visualization caches—not issued forecast evidence. Wind direction is absent today; later retain U/V components (or cyclic derivatives), not a raw 0–360° scalar. |
+| Weather | The next historical rebuild backfills Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values at each FIRMS-seeded candidate tile and UTC hourly prediction anchor. Mark them `historical_analysis`; they are retrospective conditions, not reconstructed issued forecasts. The separate Open-Meteo Single Runs collector may capture one manually selected model/run for an operational experiment. The completed release remains weather-free as a past artifact. Retain wind as U/V components (or cyclic derivatives), never a raw 0–360° scalar. |
 | First model | A simple `HistGradientBoostingClassifier` tabular baseline after a valid binary candidate table exists. It is intentionally not a spatial deep-learning cube. |
 | Evaluation split | Chronological and grouped by FEDS `source_snapshot_time`, so all cells from one source snapshot stay on one side of holdout. Never randomly split neighboring cells or source snapshots. |
 | Storage | The complete `data/` tree is hard-capped at 20,000,000,000 bytes. Existing files are counted and never silently evicted. |
@@ -39,10 +40,11 @@ and [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md).
 
 1. Preserve raw provider responses unchanged and append provenance/coverage
    records. Never edit raw data or coverage ledger entries by hand.
-2. Do not use information that was unavailable at the row's cutoff. In
-   particular, do not use retrospective ingestion time, final WFIGS geometry,
-   future FEDS state, or a reanalysis/retrospective weather value as an
-   operational feature.
+2. Do not use information that was unavailable at the row's cutoff for an
+   operational feature. In particular, do not use retrospective ingestion
+   time, final WFIGS geometry, or future FEDS state. Retrospective ECMWF IFS
+   weather is allowed only in explicitly labelled `historical_analysis` rows;
+   it must never be represented as an issued forecast.
 3. FEDS absence is **not** a no-spread label. Missing, partial, cloudy,
    unprocessed, or otherwise unobserved evidence is unknown until a valid
    observability policy says otherwise.
@@ -64,6 +66,12 @@ and [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md).
    file, or extracted national land-cover TIFF under the 20 GB policy. Run
    archive-writing commands one at a time and keep background workers below
    10 on this WSL environment.
+9. A historical weather value is usable only when an archived ECMWF IFS
+   response, candidate-cell/tile mapping, and valid hour match the row's UTC
+   hourly prediction anchor at or before the cutoff; retain its retrieval time
+   and `historical_analysis` mode. An operational issued-forecast value instead
+   requires an explicit model/run and captured availability timestamp at or
+   before the cutoff, with a valid time after that availability time.
 
 ## What is complete and verified
 
@@ -147,13 +155,28 @@ allowlist and `split_group_column="source_snapshot_time"`. Any resulting
 score remains a weak-label experiment until paired observation coverage and
 independent validation are added.
 
-### 3. Add weather correctly
+### 3. Backfill historical weather; optionally capture issued forecasts
 
-Implement a compact HRRR/HRDPS issued-forecast value-tile extractor. Each
-value needs native grid/tile ID, variable, model run/issue/publication time,
-valid time, retrieval time, and cutoff availability decision. Keep
-post-event reanalysis separate for evaluation/research only. Do not add wind
-direction until retained U/V source values exist.
+For the planned 2026-05-11 through 2026-08-22 source rebuild, turn the
+FIRMS-seeded candidate cells into compact weather tiles, then retrieve hourly
+Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values for each tile
+and each row's prediction cutoff floored to UTC hour. Preserve raw responses,
+the tile/candidate mapping, model, valid hour, retrieval time, and
+`historical_analysis` feature mode. Include target=0 proxy candidate cells in
+the mapping, not only positive detections. This gives the training table
+retrospective weather conditions; it does not claim the conditions were known
+as a forecast at the cutoff. The backfill and join must receive the exact same
+completed candidate manifest; its path, build ID, and content hash are retained.
+The default compact weather cover is a 10 km spatial approximation before the
+provider grid snap, so it is not literal 1 km meteorology.
+
+The Open-Meteo Single Runs capture remains optional and only while the forecast
+is operational. The operator explicitly supplies the model and
+UTC model-run time; the collector archives the exact response plus
+candidate-cell/tile mappings and preserves the
+600-location-unit-per-minute pacing/retry/429-pause behavior. A captured
+response establishes availability at its response time, not at model
+initialization time. Retain wind as U/V components in either feature mode.
 
 ### 4. Improve observations and static features
 
@@ -204,11 +227,19 @@ from-scratch collection, use the ordered commands in
 [Collecting data](collecting-data.md); it includes the May 30 FIRMS context
 day and August 11 FEDS boundary snapshot.
 
-To create the user-requested no-weather 2026-05-11 through 2026-08-22 range,
+To create the requested weather-bearing 2026-05-11 through 2026-08-22 range,
 first retain FIRMS for 2026-05-10 through 2026-08-22 and FEDS source snapshots
-through 2026-08-23, then rebuild FEDS labels, terrain blocks, the positive
-view, and the candidate view. The current builder deliberately refuses to
-extend beyond its completed positive-view manifest.
+through 2026-08-23. Rebuild FEDS labels, terrain blocks, the positive view,
+and a completed base candidate view. Then
+`open_meteo_historical.backfill_open_meteo_historical_weather` backfills hourly
+Open-Meteo Historical Weather API ECMWF IFS values at every candidate tile and
+row anchor. If it pauses, pass its partial manifest as `resume_manifest` to
+reuse complete dates. Pass only the resulting complete manifest, together with
+the same base candidate manifest, to
+`weather_candidate_dataset.build_weather_candidate_dataset`, then export the
+separate weather-bearing view. The base candidate view is immutable; the
+current builder deliberately refuses to extend beyond its completed
+positive-view manifest.
 
 ## Useful references
 

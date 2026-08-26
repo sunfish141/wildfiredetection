@@ -18,7 +18,7 @@ alignment is separately validated.
 | Fire state | Unfiltered FIRMS detections: platform, acquisition time, TI4/TI5, FRP, confidence, scan/track, day/night, and source fields | Acquisition time plus the declared availability lag must be no later than the cutoff | Keep all raw detections; the 305 K TI4 rule is a downstream field, not a collection filter. |
 | Static terrain | Retained ETOPO elevation, slope, and downhill aspect sampled at the 1 km cell centre | Static source version retained for the package | It is a sampled source pixel, not a dense 1 km terrain cache. |
 | Weak spread target | Consecutive FEDS perimeter snapshots plus FIRMS candidate support | Source snapshots t and t + 12 h must both be retained and paired for the same fire | Positive cells are `weak_satellite`; target=0 is only a FIRMS-seeded `weak_negative_proxy`, never confirmed clear/no-burn. |
-| Weather | HRDPS candidate/retrieval plan | None: no forecast measurements are stored | No temperature, humidity, wind, gust, or wind-direction feature is available yet. |
+| Weather | Historical Open-Meteo API, ECMWF IFS (`ecmwf_ifs`), at FIRMS-seeded candidate tiles; optional forward Open-Meteo Single Runs | Historical-analysis values must match the candidate tile and a deterministic UTC hourly anchor at or before the cutoff; issued-forecast values additionally require model/run and captured availability | The completed release has no weather values. Historical values are retrospective analysis, not reconstructed issued forecasts. A mapping must cover all selected candidate cells, including target=0 weak-negative proxies. |
 | Observation coverage | VIIRS Level-2 inventory | None: paired fire-mask/QA + geolocation cutouts are not stored | Cannot prove clear/no-fire or produce coverage-aware negatives yet. |
 | Land cover/fuels | Canada/U.S. NALCMS source archives | None: no categorical aggregation is implemented | Never average land-cover class IDs. |
 | Incident/reference | CWFIS incident context and WFIGS final/reference perimeters | Only source facts available by cutoff | They validate/match context; they are not 12-hour spread targets. |
@@ -70,6 +70,14 @@ Every persisted training candidate must include:
 - deterministic candidate/negative-selection reason; and
 - split/model/feature versions once fitted.
 
+For a weather-bearing row, also retain the returned tile/grid, raw-response
+artifact ID, candidate-cell-to-tile mapping, valid hour, and feature mode. A
+`historical_analysis` row records `ecmwf_ifs`, retrieval time, request range,
+and the deterministic hourly weather-anchor rule; it is valid only when its
+tile and hour match the candidate row. A separate issued-forecast row records
+the selected model/run, captured availability timestamp and basis, and the
+result of the operational as-of availability decision.
+
 ## Current implementation boundary
 
 The canonical grid, FEDS collection/positive-label builder, leakage-gated
@@ -81,10 +89,14 @@ without FIRMS candidate support as unscored diagnostics. The first retained
 range is 2026-05-31 through 2026-08-10. Even with the completed wiring:
 
 - no absent FEDS label may become a zero;
-- no notebook Open-Meteo CSV may become a weather feature;
+- no unarchived or unversioned weather lookup may become a weather feature;
+  the contracted Historical Weather API/ECMWF IFS path is permitted only as
+  explicitly labelled retrospective analysis, never as an issued forecast;
 - no WFIGS final perimeter may become earlier fire state; and
-- the model must be described as a no-weather, satellite-weak baseline rather
-  than an operational wildfire-spread predictor.
+- the completed release must be described as a no-weather, satellite-weak
+  baseline rather than an operational wildfire-spread predictor; a later
+  historical-weather model remains retrospective analysis, not an issued-
+  forecast model.
 
 See [the training pipeline](training-pipeline.md) and
 [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md) for the fixed

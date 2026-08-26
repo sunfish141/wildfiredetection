@@ -1,9 +1,10 @@
 """Canonical, leakage-safe records for issued weather forecasts.
 
-The live weather lookup used by the notebook is useful for visualization, but
-it does not identify the forecast run that was available when a prediction
-would have been made.  This module keeps those concepts explicit so forecast
-data can be collected once and safely reused for training and inference.
+Each record preserves the model's run time separately from the moment that
+forecast was demonstrably available to this project.  Some providers publish
+an explicit timestamp; a forward collector can instead prove availability by
+archiving a successful response at its capture time.  The two cases must never
+be conflated.
 """
 
 from __future__ import annotations
@@ -68,11 +69,13 @@ def normalize_forecast_measurement(
     provider: str,
     model: str,
     model_run_at: object,
-    published_at: object,
     retrieved_at: object,
     raw_artifact_id: str,
     ingestion_id: str,
     source_uri: str,
+    published_at: object | None = None,
+    availability_at: object | None = None,
+    availability_basis: str | None = None,
     model_version: str | None = None,
     schema_version: int = FORECAST_SCHEMA_VERSION,
 ) -> dict[str, object]:
@@ -90,9 +93,25 @@ def normalize_forecast_measurement(
         )
 
     run_at = _parse_utc(model_run_at, "model_run_at")
-    available_at = _parse_utc(published_at, "published_at")
     retrieved = _parse_utc(retrieved_at, "retrieved_at")
-    if available_at < run_at:
+    if availability_at is None:
+        availability_at = published_at
+    if availability_at is None:
+        raise ForecastRecordError("forecast record must provide availability_at or published_at")
+    available = _parse_utc(availability_at, "availability_at")
+    published = _parse_utc(published_at, "published_at") if published_at is not None else None
+    if availability_basis is None:
+        availability_basis = (
+            "provider-published-at/v1"
+            if published is not None
+            else "collector-captured-response/v1"
+        )
+    if not isinstance(availability_basis, str) or not availability_basis.strip():
+        raise ForecastRecordError("availability_basis must be non-empty")
+    basis = availability_basis.strip()
+    if available < run_at:
+        raise ForecastRecordError("availability_at must not precede model_run_at")
+    if published is not None and published < run_at:
         raise ForecastRecordError("published_at must not precede model_run_at")
 
     valid_at = _utc_text(measurement.get("valid_at"), "valid_at")
@@ -128,14 +147,15 @@ def normalize_forecast_measurement(
         )
     )
     valid = _parse_utc(valid_at, "valid_at")
-    return {
+    normalized: dict[str, object] = {
         "weather_snapshot_id": record_id,
         "provider": provider.strip(),
         "product_kind": "forecast",
         "model": model.strip(),
         "model_version": model_version,
         "model_run_at": run_at.isoformat().replace("+00:00", "Z"),
-        "published_at": available_at.isoformat().replace("+00:00", "Z"),
+        "availability_at": available.isoformat().replace("+00:00", "Z"),
+        "availability_basis": basis,
         "retrieved_at": retrieved.isoformat().replace("+00:00", "Z"),
         "valid_at": valid_at,
         "lead_hours": (valid - run_at).total_seconds() / 3_600,
@@ -153,22 +173,31 @@ def normalize_forecast_measurement(
         "schema_version": schema_version,
         "raw_fields": dict(measurement),
     }
+    forecast_tile_id = measurement.get("forecast_tile_id")
+    if forecast_tile_id is not None:
+        if not isinstance(forecast_tile_id, str) or not forecast_tile_id.strip():
+            raise ForecastRecordError("forecast_tile_id must be non-empty when supplied")
+        normalized["forecast_tile_id"] = forecast_tile_id.strip()
+    if published is not None:
+        normalized["published_at"] = published.isoformat().replace("+00:00", "Z")
+    return normalized
 
 
 def forecasts_available_at(
     records: Iterable[Mapping[str, object]], *, anchor_at: object
 ) -> list[Mapping[str, object]]:
-    """Return measurements provably published by a prediction cutoff.
+    """Return measurements provably available by a prediction cutoff.
 
-    This deliberately does not require ``valid_at <= anchor_at`` because the
-    point of a forecast is to make a prediction for a future valid time.
+    The valid time must be strictly after the anchor: an old value retained in
+    a forecast response is not a forward-looking feature at that cutoff.
     """
     anchor = _parse_utc(anchor_at, "anchor_at")
     available = []
     for record in records:
         run_at = _parse_utc(record.get("model_run_at"), "model_run_at")
-        published_at = _parse_utc(record.get("published_at"), "published_at")
-        if run_at <= published_at <= anchor:
+        availability_at = _availability_at(record)
+        valid_at = _parse_utc(record.get("valid_at"), "valid_at")
+        if run_at <= availability_at <= anchor < valid_at:
             available.append(record)
     return available
 
@@ -189,8 +218,12 @@ def latest_forecasts_as_of(
             record.get("member"),
         )
         prior = newest.get(key)
-        if prior is None or _parse_utc(record.get("published_at"), "published_at") > _parse_utc(
-            prior.get("published_at"), "published_at"
-        ):
+        if prior is None or _availability_at(record) > _availability_at(prior):
             newest[key] = record
     return list(newest.values())
+
+
+def _availability_at(record: Mapping[str, object]) -> datetime:
+    """Read explicit capture availability, falling back for older records."""
+    value = record.get("availability_at", record.get("published_at"))
+    return _parse_utc(value, "availability_at")

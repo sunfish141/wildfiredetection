@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted for the first implementation — 2026-08-20.
+Accepted for the first implementation — 2026-08-20. Amended 2026-08-25 to
+separate retrospective historical-weather analysis from issued-forecast
+features.
 
 ## Context
 
@@ -58,11 +60,18 @@ of scope for the first implementation.
    snapshot cannot straddle train and holdout. The artifact must persist its
    feature list, metrics, grid version, label version, split group, and
    availability policy.
-7. Treat weather as absent from the first table until issued-at forecast values
-   are actually archived with run/issue, valid, publication/retrieval, and
-   availability times. The HRDPS plan and notebook Open-Meteo CSVs are not
-   weather features. Wind direction will enter as retained U/V components (or
-   cyclic derivatives), not as an unwrapped degree scalar.
+7. Keep the completed 2026-05-31 through 2026-08-10 release as the
+   no-weather baseline it was built to be. For the 2026-05-11 through
+   2026-08-22 historical rebuild, backfill Open-Meteo Historical Weather API
+   ECMWF IFS (`ecmwf_ifs`) values at FIRMS-seeded candidate tiles and each
+   row's UTC prediction cutoff floored to the hour. Archive raw responses and
+   retain the model, tile/candidate mapping, valid hour, retrieval time, and
+   `historical_analysis` feature mode. This is retrospective weather analysis,
+   not a reconstructed issued forecast. The optional forward Open-Meteo Single
+   Runs path remains the separate eligible source for operational issued-
+   forecast features: it needs an explicit model/run and captured availability
+   evidence. Wind direction enters as retained U/V components (or cyclic
+   derivatives), not as an unwrapped degree scalar.
 8. Persist the currently valid positive-only view now: one FEDS-positive cell
    joined to availability-gated FIRMS and sampled terrain, with raw-artifact
    lineage and explicit weather missingness. Archive-backed assembly requires
@@ -75,9 +84,10 @@ of scope for the first implementation.
 
 ## Consequences
 
-The first model can produce a reproducible no-weather, satellite-weak
-baseline while making its limitations visible. It cannot be described as an
-operational weather-aware wildfire-spread forecast, and its score cannot be
+The completed first release remains a reproducible no-weather, satellite-weak
+baseline. The next historical model may include retrospective ECMWF IFS weather
+features, but it must be described as historical weather analysis rather than
+an operational weather-aware wildfire-spread forecast. Neither score can be
 interpreted as independent validation against FIRMS.
 
 The remaining binary-training decision is deliberate: a versioned candidate
@@ -99,5 +109,6 @@ continental 1 km feature cube. Derived views remain subject to ADR 0001's
 | Global 00:00/12:00 UTC FEDS anchors | FEDS uses a local-solar source convention, so this would falsely imply one physical observation time across North America. |
 | Use WFIGS final perimeters as time-series labels | Final/reference geometry does not reconstruct when land newly burned. |
 | Treat FEDS absence as a no-spread negative | No FEDS perimeter change is not a valid clear/no-burn observation mask. |
-| Include notebook Open-Meteo weather | It lacks issued-at forecast provenance and would leak post-event knowledge into an operational claim. |
+| Treat a historical-weather value as an issued forecast | Historical ECMWF IFS backfill is allowed for retrospective analysis, but it cannot prove what was available to an operator at the cutoff. |
+| Include an unarchived or unversioned weather lookup | It lacks immutable response, tile/anchor mapping, model, and feature-mode provenance. |
 | Start with a spatial deep-learning cube | It requires a candidate/negative policy and large dense feature storage that the current 20 GB package does not yet support. |

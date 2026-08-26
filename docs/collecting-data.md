@@ -1,14 +1,14 @@
 # Re-collect the compact wildfire dataset
 
-Run these commands from the repository root, one at a time. They rebuild the
-U.S./Canada **prediction/label range** for **2026-05-31 through 2026-08-10**,
-inclusive. The commands deliberately include a leading FIRMS context date and
-a following FEDS source date where those are required to construct that range;
-those boundary dates do not extend the target range. Every archive-writing
-command writes under `data/`, so do not run two of them concurrently.
+Run these commands from the repository root, one at a time. The checked-in
+commands reproduce the completed U.S./Canada **prediction/label range** for
+**2026-05-31 through 2026-08-10**, inclusive. The next planned rebuild is
+**2026-05-11 through 2026-08-22**; use the same boundary-date rules when
+substituting those dates. Every archive-writing command writes under `data/`,
+so do not run two of them concurrently.
 
-The package has a hard **20,000,000,000-byte** limit, including existing CSV
-exports and notebook caches. The collectors preserve existing evidence and
+The package has a hard **20,000,000,000-byte** limit, including every existing
+retained artifact. The collectors preserve existing evidence and
 stop before an admitted write would exceed the policy; they never delete old
 files to make space.
 
@@ -202,26 +202,26 @@ negative labels yet.
 Never use `--legacy-fire-files-only` in this 20 GB package. A fire product
 without its matching geolocation product is not a complete observation.
 
-## Step 9: Make the issued-weather retrieval plan
+## Step 9: Optionally capture a forward Open-Meteo forecast run
 
-```bash
-PYTHONPATH=src .venv/bin/python -m wildfire_data.plan_forecast_tiles \
-  --start 2026-05-31 \
-  --end 2026-08-10 \
-  --model hrdps \
-  --data-root data
-```
+Forward issued-forecast research remains optional. Use
+`wildfire_firms_analysis.ipynb` while the forecast is operational, set the
+capture cell's explicit `model` and exact UTC `model_run_at`, review the
+planned candidate-cell tiles, then enable the capture flag. The Single Runs
+capture stores an immutable response before normalizing it and retains the
+model/run, returned grid location, valid time, raw artifact ID, and timestamp
+at which that exact response was successfully received. Only values valid
+after that captured availability time can pass an operational as-of join.
 
-You get a scored HRDPS fire-context tile plan under
-`data/weather/forecast-tile-plans/`. It records selected/capped 96 km tiles
-and `fire_evidence_score`, `forecast_availability_score`, and
-`retention_priority_score`.
-
-You do **not** get temperature, humidity, precipitation, wind speed, wind
-direction, or gust values. This repository does not yet have the compact
-issued-forecast tile extractor, so no weather column is eligible for the first
-training table. The notebook's Open-Meteo CSVs are visualization caches and
-must not be substituted here.
+Keep the rate limit enabled: the default is 600 location units per minute.
+Transient errors retry; HTTP 429 waits at least 90 seconds or a longer
+`Retry-After`; two consecutive 429 responses pause the run rather than
+retrying indefinitely. Already archived batches and the final 429 response
+remain immutable, with the latter recorded as failed coverage. A later
+continuation starts a new immutable attempt; it is not a mutable cache resume.
+The historical backfill in Step 11b uses the same pacing and pause behaviour,
+but its explicit partial-manifest resume reuses already complete dates in a new
+immutable backfill manifest.
 
 ## Step 10: Collect terrain source blocks
 
@@ -266,7 +266,7 @@ zero targets, candidates, weather, or wind direction, and therefore cannot
 fit a binary classifier by itself. Step 11a applies the retained FIRMS-only
 candidate/weak-negative policy before the tabular baseline can be trained.
 
-## Step 11a: Build the uploadable no-weather candidate view
+## Step 11a: Build a candidate view (current release command)
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m wildfire_data.build_candidate_dataset \
@@ -282,6 +282,9 @@ coverage for every source snapshot, adds cutoff-safe FIRMS and terrain
 features to deterministic FIRMS-only candidate cells, and atomically publishes
 a completed candidate-view manifest. It creates target=0 only as explicitly
 named `weak_negative_proxy` rows; it does not claim clear/no-burn evidence.
+The command below reproduces the completed no-weather release. The next
+historical rebuild adds the ECMWF IFS tile/hourly-anchor backfill before its
+weather-bearing candidate dataset is assembled.
 
 Export the selected view outside `data/` so the portable copy does not consume
 the 20 GB archive budget:
@@ -295,8 +298,79 @@ PYTHONPATH=src .venv/bin/python -m wildfire_data.export_candidate_dataset \
 
 The current export has 305,528 candidate rows, 11,848 unscored positives,
 JSON Lines gzip files, a schema, manifest, inventory, and SHA-256 checksums.
-For a notebook version of these same commands, use
-`notebooks/build_uploadable_dataset.ipynb`.
+For the planned weather-bearing rebuild and upload, use
+`wildfire_firms_analysis.ipynb`.
+
+## Step 11b: Backfill historical weather and publish a weather-bearing view
+
+For the 2026-05-11 through 2026-08-22 rebuild, pass the completed candidate
+manifest from Step 11a as the immutable spine. `open_meteo_historical.py`
+records that manifest's path, build ID, and content hash, then derives
+compact FIRMS-seeded weather tiles from that view and calls the
+[Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
+with `models=ecmwf_ifs` and `timezone=UTC`, one candidate date at a time. It
+requests hourly `temperature_2m`, `relative_humidity_2m`, `precipitation`,
+`weather_code`, `wind_speed_10m`, and `wind_direction_10m`. Batched locations
+are supported, but every location counts toward rate-limit pacing.
+
+The default compact-cover distance is 10 km: a request tile may be up to that
+far from a 1 km candidate centre, followed by Open-Meteo's own grid snap. The
+mapping retains the candidate-to-request distance and both locations; lower
+the distance only when the additional rate-limited requests are justified.
+
+For each candidate row, `floor_weather_hour` derives the UTC weather hour at
+or before its prediction cutoff; the joined row records it as
+`weather_observed_at`. The collector archives the raw response, normalizes its
+values, and persists a candidate-cell-to-weather-tile mapping with FIRMS
+raw-artifact and example lineage. It includes target=0 `weak_negative_proxy`
+cells. Wind direction is converted to U/V components for the model feature
+set.
+
+`backfill_open_meteo_historical_weather` writes an immutable per-date
+backfill manifest. If the rate limiter or storage budget pauses it, the
+manifest is partial; pass it as `--resume-manifest` with the same base candidate
+manifest to reuse completed dates and retry the first unfinished date rather
+than assembling a partially weathered dataset.
+It retains the same 600-location-unit-per-minute pacing, `Retry-After`
+cooldown, retry, and two-consecutive-429 pause policy as Step 9.
+Only a complete backfill manifest may be passed to
+`weather_candidate_dataset.build_weather_candidate_dataset`, which joins the
+exact tile and hourly anchor to the same completed base candidate view (its
+identity must match the backfill manifest) and publishes
+a distinct immutable weather-bearing candidate view. Use
+`export_weather_candidate_dataset_release` to create its upload directory;
+the base no-weather view is never mutated.
+
+```bash
+# Substitute the completed manifest printed by Step 11a.
+PYTHONPATH=src .venv/bin/python -m wildfire_data.collect_historical_weather \
+  --data-root data \
+  --candidate-manifest data/manifests/candidate-dataset-builds/<base>.json \
+  --start 2026-05-11 \
+  --end 2026-08-22
+
+# If that command reports a partial backfill, keep the same base manifest and
+# continue with the partial manifest it printed.
+PYTHONPATH=src .venv/bin/python -m wildfire_data.collect_historical_weather \
+  --data-root data \
+  --candidate-manifest data/manifests/candidate-dataset-builds/<base>.json \
+  --resume-manifest data/manifests/open-meteo-historical-weather-backfills/<partial>.json
+
+PYTHONPATH=src .venv/bin/python -m wildfire_data.build_weather_candidate_dataset \
+  --data-root data \
+  --candidate-manifest data/manifests/candidate-dataset-builds/<base>.json \
+  --weather-backfill-manifest data/manifests/open-meteo-historical-weather-backfills/<complete>.json
+
+PYTHONPATH=src .venv/bin/python -m wildfire_data.export_weather_candidate_dataset \
+  --data-root data \
+  --weather-candidate-manifest data/manifests/weather-candidate-dataset-builds/<weather>.json \
+  --output releases/wildfire-spread-firms-feds-weather-2026-05-11_to_2026-08-22
+```
+
+This is a **retrospective weather-analysis** feature. It describes historical
+conditions for offline training analysis, not the forecast an operator had at
+the cutoff. Mark it `historical_analysis`; do not use it for an operational
+as-of claim.
 
 ## Step 12: Archive Canada land-cover source evidence
 
@@ -330,8 +404,8 @@ PYTHONPATH=src .venv/bin/python -m wildfire_data.inspect_storage_budget --data-r
 
 You get the final byte-level inventory. It must report no more than
 20,000,000,000 bytes. Unused capacity is deliberate reserve for correctly
-implemented paired Level-2 cutouts and issued-weather value tiles—not a reason
-to add unpaired swaths or retrospective weather caches.
+implemented paired Level-2 cutouts and compact weather tiles—not a reason to
+add unpaired swaths or unproven, unmapped weather data.
 
 ## What this supplies to training today
 
@@ -341,16 +415,16 @@ to add unpaired swaths or retrospective weather caches.
 | Spread target | FEDS 1 km, 12-hour perimeter-difference positives | Weak positive labels only |
 | Static terrain | ETOPO elevation, slope, aspect sampled at the cell centre | Ready feature source |
 | Training view | FEDS-positive rows joined to cutoff-safe FIRMS and terrain | Ready positive-only source view |
-| Candidate dataset | FIRMS-supported 1 km candidate rows with terrain/FIRMS features | Ready no-weather weak-label baseline; target=0 is proxy only |
-| Weather | HRDPS candidate/retrieval plan only | **No value data; no wind direction** |
+| Candidate dataset | FIRMS-supported 1 km candidate rows with terrain/FIRMS features | Completed no-weather weak-label baseline is a past release; target=0 is proxy only |
+| Weather | Open-Meteo Historical Weather API ECMWF IFS backfill at candidate tiles/hourly anchors; optional forward Single Runs | Historical analysis is the next training feature path; issued-forecast availability requirements apply only to the optional forward mode |
 | Negative/observation mask | Level-2 inventory only | Not available yet |
 | Land cover/fuels | NALCMS source archives only | Not feature-ready yet |
 | Final validation | WFIGS final/reference perimeters | Not a progression target |
 
 The code contains the canonical grid, FIRMS feature builder, terrain sampler,
 FEDS-label/positive-view assembler, candidate sampler/view publisher, release
-exporter, and tabular baseline. The completed no-weather release is a research
-baseline, not an operational predictor; see
+exporter, and tabular baseline. The completed no-weather release is a past
+research baseline, not an operational predictor; see
 [the training pipeline](training-pipeline.md) for the exact boundary.
 
 ## Retry rules

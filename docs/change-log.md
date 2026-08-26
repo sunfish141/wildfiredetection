@@ -1,5 +1,22 @@
 # Change log
 
+## 2026-08-25
+
+- Adopted the historical-weather training contract: backfill the Open-Meteo
+  Historical Weather API ECMWF IFS (`ecmwf_ifs`) at FIRMS-seeded candidate
+  tiles and each row's UTC hourly prediction anchor. These values are retained
+  as `historical_analysis` with raw-response, retrieval, tile-mapping, model,
+  and valid-hour provenance; they are not reconstructed issued forecasts.
+- Retained the optional Open-Meteo Single Runs capture contract for future
+  operational research. It requires an operator-selected model/run, preserves
+  request pacing/retries and the deliberate 429 pause, archives immutable
+  responses and candidate cell-to-tile mappings, and records successful-
+  response availability time.
+- Kept the completed 2026-05-31 through 2026-08-10 release explicitly
+  weather-free as a past artifact. The planned 2026-05-11 through 2026-08-22
+  rebuild may add retrospective historical-weather features, while only
+  contemporaneous Single Runs captures can support an operational as-of claim.
+
 ## 2026-08-24
 
 - Added the manifest-selected no-weather FIRMS/FEDS candidate-table pipeline,
@@ -10,9 +27,9 @@
   305,528 candidate rows (19,528 supported weak positives and 286,000
   FIRMS-seeded weak-negative proxies), plus 11,848 unscored FIRMS-uncovered
   positives. The release includes schema, inventory, and SHA-256 checksums.
-- Explicitly excluded Open-Meteo exports from model inputs because they are
-  retrospective visualization caches without issued-forecast availability
-  provenance. The release remains a no-weather weak-label research baseline.
+- Explicitly kept weather out of model inputs because no forecast values with
+  retained run and availability provenance were captured. The release remains
+  a no-weather weak-label research baseline.
 
 ## 2026-08-20
 

@@ -46,5 +46,7 @@ Rows: 305,528 candidate rows and
 - FEDS weak labels and FIRMS features share satellite evidence and are not independent ground truth.
 - FIRMS-uncovered positives are retained in unscored_positives.jsonl.gz and excluded from the candidate table.
 - Only source snapshots represented by FEDS-positive labels are included; no all-zero FEDS window is invented.
-- Weather is absent. Open-Meteo exports are retrospective visualization data and are excluded.
+- Weather is absent from this immutable past release. It predates the
+  retrospective ECMWF IFS weather-analysis backfill contract; its contents and
+  checksums are unchanged.
 - The chronological split groups whole source snapshots but is not incident-held-out or region-held-out validation.

@@ -147,6 +147,32 @@ class StorageBudgetTests(unittest.TestCase):
             "operational_labels_and_progression",
         )
 
+    def test_maps_open_meteo_raw_responses_and_candidate_mappings_to_weather(self):
+        self.assertEqual(
+            category_for_relative_path("raw/open-meteo-single-runs/response.json.gz"),
+            "issued_weather_tiles",
+        )
+        self.assertEqual(
+            category_for_relative_path(
+                "normalized/open-meteo-forecast-tile-assignments/records.jsonl.gz"
+            ),
+            "issued_weather_tiles",
+        )
+        self.assertEqual(
+            category_for_relative_path("raw/open-meteo-historical-weather/response.json.gz"),
+            "issued_weather_tiles",
+        )
+        self.assertEqual(
+            category_for_relative_path("normalized/historical-weather/records.jsonl.gz"),
+            "issued_weather_tiles",
+        )
+        self.assertEqual(
+            category_for_relative_path(
+                "normalized/open-meteo-historical-weather-tile-assignments/records.jsonl.gz"
+            ),
+            "issued_weather_tiles",
+        )
+
     def test_maps_etopo_raw_subsets_and_compact_blocks_to_static_features(self):
         self.assertEqual(
             category_for_relative_path("raw/noaa-ncei-etopo-terrain/response.tiff.gz"),
