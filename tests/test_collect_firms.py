@@ -67,3 +67,44 @@ class CollectFirmsTests(unittest.TestCase):
         )
         self.assertNotIn("do-not-persist", manifest_text)
         self.assertEqual(len(session.urls), 2)
+
+    def test_skips_terminal_product_day_unless_refresh_is_requested(self):
+        payload = (
+            b"latitude,longitude,bright_ti4,acq_date,acq_time\n"
+            b"54.1,-106.2,306,2026-07-26,0040\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            first_session = _FakeSession([_FakeResponse(content=payload)])
+            collect_firms_range(
+                directory,
+                api_key="do-not-persist",
+                start_date=date(2026, 7, 26),
+                end_date=date(2026, 7, 26),
+                session=first_session,
+                retrieved_at=datetime(2026, 7, 26, 1, tzinfo=timezone.utc),
+            )
+            resumed_session = _FakeSession([])
+            resumed = collect_firms_range(
+                directory,
+                api_key="do-not-persist",
+                start_date=date(2026, 7, 26),
+                end_date=date(2026, 7, 26),
+                session=resumed_session,
+                retrieved_at=datetime(2026, 7, 26, 2, tzinfo=timezone.utc),
+            )
+            refreshed_session = _FakeSession([_FakeResponse(content=payload)])
+            refreshed = collect_firms_range(
+                directory,
+                api_key="do-not-persist",
+                start_date=date(2026, 7, 26),
+                end_date=date(2026, 7, 26),
+                session=refreshed_session,
+                retrieved_at=datetime(2026, 7, 26, 3, tzinfo=timezone.utc),
+                refresh=True,
+            )
+
+        self.assertEqual(resumed.skipped_terminal_count, 1)
+        self.assertEqual(resumed.responses, ())
+        self.assertEqual(resumed_session.urls, [])
+        self.assertEqual(len(refreshed.responses), 1)
+        self.assertEqual(len(refreshed_session.urls), 1)

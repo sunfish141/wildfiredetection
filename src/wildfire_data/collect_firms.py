@@ -14,7 +14,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .data_archive import CoverageRecord, CoverageStatus
+from .data_archive import CoverageLedger, CoverageRecord, CoverageStatus
 from .firms_collection import (
     FirmsCollectionError,
     FirmsCollectionResult,
@@ -36,6 +36,7 @@ class FirmsRangeCollection:
     responses: tuple[FirmsCollectionResult, ...]
     request_failures: tuple[CoverageRecord, ...]
     normalization_failures: tuple[str, ...]
+    skipped_terminal_count: int = 0
 
     @property
     def failed_count(self) -> int:
@@ -71,12 +72,15 @@ def collect_firms_range(
     timeout: tuple[int, int] = (10, 120),
     retrieved_at: datetime | None = None,
     storage_budget: StorageBudgetPolicy | None = None,
+    refresh: bool = False,
 ) -> FirmsRangeCollection:
     """Collect every requested day/product while recording failures for retry.
 
     The function deliberately continues after one request or normalization
     failure.  The coverage ledger tells a scheduler exactly which daily
-    product windows need another attempt.
+    product windows need another attempt.  A terminal product/day already in
+    the ledger is skipped unless ``refresh`` is explicitly requested, so a
+    resumed range does not duplicate immutable source artifacts.
     """
     if end_date < start_date:
         raise ValueError("end_date must not be before start_date")
@@ -91,10 +95,25 @@ def collect_firms_range(
     responses = []
     request_failures = []
     normalization_failures = []
+    skipped_terminal_count = 0
+    latest_by_expected_id = {
+        record.expected_coverage_id: record
+        for record in CoverageLedger(archive_root).entries()
+        if record.expected_coverage_id is not None
+    }
     try:
         request_day = start_date
         while request_day <= end_date:
             for product in product_values:
+                expected_coverage_id = f"firms:{product}:{region}:{request_day.isoformat()}"
+                existing = latest_by_expected_id.get(expected_coverage_id)
+                if (
+                    not refresh
+                    and existing is not None
+                    and existing.status in {CoverageStatus.COMPLETE, CoverageStatus.EMPTY_CONFIRMED}
+                ):
+                    skipped_terminal_count += 1
+                    continue
                 url = firms_area_url(
                     api_key=api_key,
                     product=product,
@@ -133,6 +152,7 @@ def collect_firms_range(
                             storage_budget=storage_budget,
                         )
                     )
+                    latest_by_expected_id[expected_coverage_id] = responses[-1].coverage
                 except FirmsCollectionError as exc:
                     normalization_failures.append(str(exc))
             request_day += timedelta(days=1)
@@ -143,6 +163,7 @@ def collect_firms_range(
         responses=tuple(responses),
         request_failures=tuple(request_failures),
         normalization_failures=tuple(normalization_failures),
+        skipped_terminal_count=skipped_terminal_count,
     )
 
 
@@ -190,6 +211,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--region", default=DEFAULT_REGION)
     parser.add_argument("--product", action="append", dest="products")
     parser.add_argument("--minimum-bright-ti4", type=float, default=305.0)
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="re-query terminal product/day coverage instead of resuming only missing or failed days",
+    )
     parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH))
     arguments = parser.parse_args(argv)
     api_key = (os.getenv("NASA_FIRMS_API_KEY") or os.getenv("MAP_KEY") or "").strip()
@@ -206,10 +232,12 @@ def main(argv: list[str] | None = None) -> int:
         region=arguments.region,
         minimum_bright_ti4=arguments.minimum_bright_ti4,
         storage_budget=load_storage_budget(arguments.policy),
+        refresh=arguments.refresh,
     )
     completed_rows = sum(response.record_count for response in result.responses)
     print(
         f"Recorded {len(result.responses):,} HTTP responses and {completed_rows:,} source rows; "
+        f"skipped {result.skipped_terminal_count:,} terminal windows; "
         f"{result.failed_count:,} coverage windows need retry."
     )
     return 1 if result.failed_count else 0
