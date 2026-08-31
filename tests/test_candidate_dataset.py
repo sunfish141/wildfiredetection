@@ -1,3 +1,4 @@
+import csv
 import gzip
 import hashlib
 import json
@@ -10,6 +11,7 @@ import numpy as np
 
 from wildfire_data.candidate_dataset import (
     CANDIDATE_DATASET_BUILD_VERSION,
+    CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION,
     CandidateDatasetError,
     build_and_store_firms_candidate_dataset,
     export_candidate_dataset_release,
@@ -82,8 +84,37 @@ class CandidateDatasetTests(unittest.TestCase):
                 all(row["candidate_dataset_build_version"] == CANDIDATE_DATASET_BUILD_VERSION for row in rows)
             )
             self.assertTrue((release.directory / "candidate_examples.jsonl.gz").is_file())
+            self.assertTrue((release.directory / "candidate_examples.csv.gz").is_file())
+            self.assertTrue((release.directory / "unscored_positives.csv.gz").is_file())
             self.assertTrue((release.directory / "dataset_manifest.json").is_file())
             self.assertEqual(_gzip_record_count(release.directory / "candidate_examples.jsonl.gz"), 3)
+            csv_rows = _gzip_csv_rows(release.directory / "candidate_examples.csv.gz")
+            self.assertEqual(len(csv_rows), 3)
+            self.assertEqual(
+                {int(row["target_newly_burned_12h"]) for row in csv_rows},
+                {0, 1},
+            )
+            self.assertEqual(csv_rows[0]["terrain_valid"], "true")
+            self.assertEqual(
+                csv_rows[0]["firms_feature_policy"],
+                '{"availability_lag_minutes":180.0,"lookback_hours":24.0}',
+            )
+            release_manifest = json.loads(
+                (release.directory / "dataset_manifest.json").read_text(encoding="utf-8")
+            )
+            schema = json.loads((release.directory / "schema.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                release_manifest["schema_version"], CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION
+            )
+            self.assertEqual(
+                release_manifest["candidate_examples_csv_columns"],
+                sorted(release_manifest["candidate_examples_csv_columns"]),
+            )
+            self.assertIn("firms_feature_policy", release_manifest["candidate_examples_csv_columns"])
+            self.assertEqual(
+                schema["csv_encoding"]["nested_values"],
+                "canonical-json-sorted-keys-compact/v1",
+            )
             _assert_checksums(self, release.directory)
 
             repeated = build_and_store_firms_candidate_dataset(
@@ -103,6 +134,47 @@ class CandidateDatasetTests(unittest.TestCase):
             )
             self.assertEqual(reused.directory, release.directory)
             self.assertEqual(reused.candidate_row_count, release.candidate_row_count)
+
+            # A historical v1 JSONL-only release remains reusable. Its
+            # immutable destination is deliberately not rewritten to add CSV.
+            legacy_directory = Path(directory) / "legacy-release"
+            export_candidate_dataset_release(
+                root,
+                legacy_directory,
+                candidate_manifest=result.manifest_path,
+            )
+            legacy_manifest_path = legacy_directory / "dataset_manifest.json"
+            legacy_manifest = json.loads(legacy_manifest_path.read_text(encoding="utf-8"))
+            legacy_manifest["schema_version"] = 1
+            legacy_manifest.pop("candidate_examples_csv_content_sha256")
+            legacy_manifest.pop("unscored_positives_csv_content_sha256")
+            legacy_manifest.pop("candidate_examples_csv_columns")
+            legacy_manifest.pop("unscored_positives_csv_columns")
+            legacy_manifest_path.write_text(
+                json.dumps(legacy_manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            (legacy_directory / "candidate_examples.csv.gz").unlink()
+            (legacy_directory / "unscored_positives.csv.gz").unlink()
+            legacy_reused = export_candidate_dataset_release(
+                root,
+                legacy_directory,
+                candidate_manifest=repeated.manifest_path,
+            )
+            self.assertEqual(legacy_reused.directory, legacy_directory)
+
+            # A v2 release must not be reused after its CSV payload changes,
+            # even when the JSONL files still match the selected source view.
+            with gzip.GzipFile(
+                release.directory / "candidate_examples.csv.gz", mode="wb", mtime=0
+            ) as output:
+                output.write(b"tampered\n")
+            with self.assertRaisesRegex(CandidateDatasetError, "already exists"):
+                export_candidate_dataset_release(
+                    root,
+                    release.directory,
+                    candidate_manifest=repeated.manifest_path,
+                )
 
     def test_refuses_to_claim_an_uncovered_source_range(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -315,6 +387,11 @@ def _policy(path):
 def _gzip_record_count(path):
     with gzip.open(path, "rt", encoding="utf-8") as source:
         return sum(1 for line in source if line.strip())
+
+
+def _gzip_csv_rows(path):
+    with gzip.open(path, "rt", encoding="utf-8", newline="") as source:
+        return list(csv.DictReader(source))
 
 
 def _assert_checksums(test, directory):

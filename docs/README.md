@@ -1,15 +1,16 @@
 # Wildfire Detection Starter
 
-This workspace contains a Jupyter notebook for pulling near-real-time fire detections from the NASA FIRMS API. It also defines two weather paths: a retrospective Open-Meteo Historical Weather API backfill for training analysis and an optional live Open-Meteo Single Runs capture for issued-forecast research. Each successful FIRMS collection archives the exact unfiltered response and writes a lossless normalized record set. The source archive retains every FIRMS field, so a later model can choose a different threshold or feature set without recollecting.
+This workspace contains a Jupyter notebook for pulling near-real-time fire detections from the NASA FIRMS API. It also defines two weather paths: a retrospective Open-Meteo Historical Weather API backfill for training analysis and an optional live Open-Meteo Single Runs capture for issued-forecast research. The active proof of concept deliberately defers both weather paths. Each successful FIRMS collection archives the exact unfiltered response and writes a lossless normalized record set. The source archive retains every FIRMS field, so a later model can choose a different threshold or feature set without recollecting.
 
 ## Spread-forecasting data contract
 
-The notebook is a fire-detection and weather-collection tool; it does not
-itself produce model labels or predictions. The repository also contains a
-manifest-selected FIRMS/FEDS candidate-table builder and an uploadable release
-exporter. The current retained source archive supports the coherent range
-2026-05-31 through 2026-08-10; the requested wider summer range must be
-recollected and rebuilt before it can be claimed.
+The notebook is a collection tool; it does not itself produce model labels or
+predictions. The repository also contains a manifest-selected FIRMS/FEDS
+candidate-table builder and an uploadable release exporter. The active proof
+of concept has rebuilt the coherent **no-weather** range 2026-05-11 through
+2026-08-22 and fitted its first baseline. A completed
+release manifest—not the presence of loose artifacts—establishes that this
+range is ready.
 The U.S./Canada collection and training contract is documented in:
 
 - [Architecture and collection contract](architecture.md)
@@ -17,6 +18,7 @@ The U.S./Canada collection and training contract is documented in:
 - [Collection runbook](collecting-data.md)
 - [First tabular training pipeline](training-pipeline.md)
 - [Uploadable candidate dataset](uploadable-dataset.md)
+- [No-weather May 11–Aug 22 proof of concept](no-weather-poc.md)
 - [Pipeline handoff](handoff.md)
 - [20 GB local-dataset decision](adr/0001-bounded-20gb-local-dataset.md)
 - [1 km / 12-hour weak-label-baseline decision](adr/0002-first-1km-12hour-weak-label-baseline.md)
@@ -41,14 +43,18 @@ counted and never silently evicted.
 The current L2 command is deliberately **inventory-only by default** under this policy. `VNP14IMG`/`VJ114IMG`/`VJ214IMG` provide fire mask and algorithm QA; matching `VNP03IMG`/`VJ103IMG`/`VJ203IMG` products provide geolocation. Downloading the former alone is not a complete observation and requires an explicit legacy override outside the 20 GB policy.
 
 The existing HRDPS plan is still only a bounded candidate plan, not weather
-measurements. The completed 2026-05-31 through 2026-08-10 release has no
-weather values; that is a property of that past release, not the contract for
-the next historical rebuild.
+measurements. The completed 2026-05-11 through 2026-08-22 POC release and
+baseline deliberately keep weather out.
 
 ## Historical weather backfill and optional forward capture
 
-For the 2026-05-11 through 2026-08-22 historical rebuild, backfill hourly
-weather from the [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
+Weather is deferred from the active 2026-05-11 through 2026-08-22 proof of
+concept. Do not invoke either weather collector or include weather features in
+that POC's CSV release or baseline. The contract below applies only to a later,
+separate weather-bearing experiment after the no-weather release is verified.
+
+For a later weather-bearing experiment derived from the completed POC candidate
+view, backfill hourly weather from the [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
 with the pinned ECMWF IFS model (`ecmwf_ifs`). Pass one completed base candidate
 manifest to the backfill; it records that manifest's path, build ID, and content
 hash before requesting each retained tile for the range needed by its candidate
@@ -96,10 +102,11 @@ recorded as failed coverage. Pass a historical backfill's partial manifest as
 retries the unfinished date; forward Single Runs remain separate immutable
 capture attempts.
 
-The planned FIRMS/FEDS rebuild spans **2026-05-11 through 2026-08-22**. It is
-expected to include the retrospective ECMWF IFS weather-analysis features
-above. The separately captured Single Runs artifacts remain the only weather
-source eligible for an operational, issued-forecast as-of experiment.
+The active FIRMS/FEDS rebuild spans **2026-05-11 through 2026-08-22** and is
+explicitly no-weather. Only a later, separately published candidate view may
+include the retrospective ECMWF IFS weather-analysis features above. The
+separately captured Single Runs artifacts remain the only weather source
+eligible for an operational, issued-forecast as-of experiment.
 
 ## Setup
 

@@ -288,8 +288,23 @@ def rasterize_positive_cells(
     return tuple(values)
 
 
-def load_feds_snapshot_records(data_root: str | Path, *, source_snapshot_time: datetime) -> list[dict[str, Any]]:
-    """Load one FEDS source snapshot partition without materializing all history."""
+def load_feds_snapshot_records(
+    data_root: str | Path,
+    *,
+    source_snapshot_time: datetime,
+    region_label: str = DEFAULT_REGION_LABEL,
+) -> list[dict[str, Any]]:
+    """Load one selected FEDS source snapshot without materializing all history.
+
+    A raw FEDS capture can be replayed more than once as the provider revises
+    its NRT perimeters.  The observed-snapshot coverage ledger records the
+    normalized artifact selected by each successful replay.  Prefer that
+    explicit artifact rather than globbing every immutable revision for a
+    snapshot, which would manufacture a conflicting source state.
+
+    Older archives without that selection metadata retain the original
+    manifest-free fallback so they remain readable.
+    """
     source_time = _as_utc(source_snapshot_time, "source_snapshot_time")
     token = _storage_component(format_utc(source_time))
     # The raw replay writes one combined source-snapshot artifact.  Live
@@ -312,8 +327,24 @@ def load_feds_snapshot_records(data_root: str | Path, *, source_snapshot_time: d
         / "source=feds-nrt-perimeters"
         / "*.jsonl.gz",
     )
+    selected_artifact_id = _selected_normalized_snapshot_artifact_id(
+        data_root,
+        source_time=source_time,
+        region_label=region_label,
+    )
+    if selected_artifact_id is not None:
+        paths = tuple(pattern.parent / f"{selected_artifact_id}.jsonl.gz" for pattern in patterns)
+        paths = tuple(path for path in paths if path.is_file())
+        if len(paths) != 1:
+            raise FedsLabelError(
+                "selected FEDS normalized artifact is unavailable or ambiguous for "
+                f"{format_utc(source_time)}: {selected_artifact_id}"
+            )
+    else:
+        paths = tuple(
+            sorted({path for pattern in patterns for path in root.glob(str(pattern.relative_to(root)))})
+        )
     records = []
-    paths = sorted({path for pattern in patterns for path in root.glob(str(pattern.relative_to(root)))})
     for path in paths:
         with gzip.open(path, "rt", encoding="utf-8") as source:
             for line in source:
@@ -326,6 +357,34 @@ def load_feds_snapshot_records(data_root: str | Path, *, source_snapshot_time: d
                 ):
                     records.append(record)
     return records
+
+
+def _selected_normalized_snapshot_artifact_id(
+    data_root: str | Path,
+    *,
+    source_time: datetime,
+    region_label: str,
+) -> str | None:
+    """Return the newest successful replay's selected artifact for one snapshot."""
+    expected_coverage_id = _observed_snapshot_expected_coverage_id(source_time, region_label)
+    for record in reversed(CoverageLedger(data_root).entries()):
+        if record.expected_coverage_id != expected_coverage_id or record.status is not CoverageStatus.COMPLETE:
+            continue
+        try:
+            document = json.loads(record.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FedsLabelError(f"could not read FEDS snapshot coverage record: {record.path}") from exc
+        detail = document.get("detail")
+        artifact_id = detail.get("normalized_artifact_id") if isinstance(detail, Mapping) else None
+        if artifact_id is None:
+            continue
+        if not isinstance(artifact_id, str) or not re.fullmatch(r"[0-9a-f]{64}", artifact_id):
+            raise FedsLabelError(
+                "FEDS snapshot coverage has an invalid normalized artifact identity for "
+                f"{format_utc(source_time)}"
+            )
+        return artifact_id
+    return None
 
 
 def build_and_store_feds_weak_labels(
@@ -383,8 +442,16 @@ def build_and_store_feds_weak_labels(
                 )
             )
             continue
-        current_records = load_feds_snapshot_records(data_root, source_snapshot_time=source_time)
-        future_records = load_feds_snapshot_records(data_root, source_snapshot_time=target_time)
+        current_records = load_feds_snapshot_records(
+            data_root,
+            source_snapshot_time=source_time,
+            region_label=region_label,
+        )
+        future_records = load_feds_snapshot_records(
+            data_root,
+            source_snapshot_time=target_time,
+            region_label=region_label,
+        )
         current_coverage = latest.get(
             _observed_snapshot_expected_coverage_id(source_time, region_label)
         )

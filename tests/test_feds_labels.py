@@ -6,7 +6,12 @@ from pathlib import Path
 
 from shapely.geometry import Polygon
 
-from wildfire_data.feds_collection import FEDS_NORMALIZATION_PARTITION
+from wildfire_data.data_archive import CoverageLedger, CoverageStatus
+from wildfire_data.feds_collection import (
+    DEFAULT_REGION_LABEL,
+    FEDS_NORMALIZATION_PARTITION,
+    _observed_snapshot_expected_coverage_id,
+)
 from wildfire_data.feds_labels import (
     DEFAULT_TIME_ALIGNMENT_MODE,
     FedsLabelError,
@@ -14,6 +19,7 @@ from wildfire_data.feds_labels import (
     build_and_store_feds_weak_labels,
     esri_rings_to_polygonal_geometry,
     estimate_feds_observation_at,
+    load_feds_snapshot_records,
     rasterize_positive_cells,
 )
 from wildfire_data.normalized_storage import write_normalized_jsonl
@@ -65,7 +71,7 @@ def _policy(path):
 def _store_snapshot(root, record, *, snapshot_time):
     source = datetime.fromisoformat(snapshot_time.replace("Z", "+00:00"))
     raw_ids = [record["raw_artifact_id"]]
-    write_normalized_jsonl(
+    return write_normalized_jsonl(
         root,
         entity="fire-progression",
         records=[record],
@@ -221,6 +227,51 @@ class FedsLabelsTests(unittest.TestCase):
 
         self.assertEqual(reports[0].status.value, "partial")
         self.assertEqual(reports[0].positive_cell_count, 0)
+
+    def test_snapshot_loader_uses_selected_normalization_artifact_not_all_revisions(self):
+        snapshot_time = "2026-07-01T00:00:00Z"
+        first = _record(
+            timestamp=snapshot_time,
+            source_id="CONUS|1|revision-one",
+            raw_id="a" * 64,
+            rings=[[[-110.00, 50.00], [-109.99, 50.00], [-109.99, 50.01], [-110.00, 50.01], [-110.00, 50.00]]],
+        )
+        second = _record(
+            timestamp=snapshot_time,
+            source_id="CONUS|1|revision-two",
+            raw_id="b" * 64,
+            rings=[[[-110.00, 50.00], [-109.98, 50.00], [-109.98, 50.01], [-110.00, 50.01], [-110.00, 50.00]]],
+        )
+        source_time = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            first_artifact = _store_snapshot(root, first, snapshot_time=snapshot_time)
+            second_artifact = _store_snapshot(root, second, snapshot_time=snapshot_time)
+            ledger = CoverageLedger(root)
+            expected_id = _observed_snapshot_expected_coverage_id(source_time, DEFAULT_REGION_LABEL)
+            ledger.record(
+                source="NASA FEDS",
+                product="feds-nrt-observed-primarykey-snapshots",
+                coverage_start=source_time,
+                coverage_end=source_time + timedelta(hours=12),
+                region=DEFAULT_REGION_LABEL,
+                expected_coverage_id=expected_id,
+                status=CoverageStatus.COMPLETE,
+                detail={"normalized_artifact_id": first_artifact.normalized_artifact_id},
+            )
+            ledger.record(
+                source="NASA FEDS",
+                product="feds-nrt-observed-primarykey-snapshots",
+                coverage_start=source_time,
+                coverage_end=source_time + timedelta(hours=12),
+                region=DEFAULT_REGION_LABEL,
+                expected_coverage_id=expected_id,
+                status=CoverageStatus.COMPLETE,
+                detail={"normalized_artifact_id": second_artifact.normalized_artifact_id},
+            )
+            records = load_feds_snapshot_records(root, source_snapshot_time=source_time)
+
+        self.assertEqual([record["source_record_id"] for record in records], [second["source_record_id"]])
 
 
 if __name__ == "__main__":

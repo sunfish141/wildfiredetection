@@ -1,11 +1,16 @@
 # Re-collect the compact wildfire dataset
 
 Run these commands from the repository root, one at a time. The checked-in
-commands reproduce the completed U.S./Canada **prediction/label range** for
-**2026-05-31 through 2026-08-10**, inclusive. The next planned rebuild is
-**2026-05-11 through 2026-08-22**; use the same boundary-date rules when
-substituting those dates. Every archive-writing command writes under `data/`,
-so do not run two of them concurrently.
+commands below retain the older U.S./Canada **2026-05-31 through 2026-08-10**
+release as reproducible historical evidence. The completed active POC range is
+**2026-05-11 through 2026-08-22**; its exact bounded chunk-and-merge build is
+in [the no-weather POC guide](no-weather-poc.md). Every archive-writing command
+writes under `data/`, so do not run two of them concurrently.
+
+The active May 11–Aug 22 rebuild is a **no-weather proof of concept**. Collect
+the non-weather evidence first and do not run Step 11b until the coherent CSV
+release and tabular baseline have been verified. The exact POC source
+boundaries, export contract, and training step are in [the no-weather POC guide](no-weather-poc.md).
 
 The package has a hard **20,000,000,000-byte** limit, including every existing
 retained artifact. The collectors preserve existing evidence and
@@ -266,7 +271,7 @@ zero targets, candidates, weather, or wind direction, and therefore cannot
 fit a binary classifier by itself. Step 11a applies the retained FIRMS-only
 candidate/weak-negative policy before the tabular baseline can be trained.
 
-## Step 11a: Build a candidate view (current release command)
+## Step 11a: Legacy candidate-view command
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m wildfire_data.build_candidate_dataset \
@@ -282,9 +287,8 @@ coverage for every source snapshot, adds cutoff-safe FIRMS and terrain
 features to deterministic FIRMS-only candidate cells, and atomically publishes
 a completed candidate-view manifest. It creates target=0 only as explicitly
 named `weak_negative_proxy` rows; it does not claim clear/no-burn evidence.
-The command below reproduces the completed no-weather release. The next
-historical rebuild adds the ECMWF IFS tile/hourly-anchor backfill before its
-weather-bearing candidate dataset is assembled.
+The command below reproduces the legacy no-weather release. The completed
+active POC uses the seven-day chunk/merge process in the POC guide instead.
 
 Export the selected view outside `data/` so the portable copy does not consume
 the 20 GB archive budget:
@@ -296,15 +300,18 @@ PYTHONPATH=src .venv/bin/python -m wildfire_data.export_candidate_dataset \
   --output releases/wildfire-spread-firms-feds-no-weather-2026-05-31_to_2026-08-10
 ```
 
-The current export has 305,528 candidate rows, 11,848 unscored positives,
+The legacy export has 305,528 candidate rows, 11,848 unscored positives,
 JSON Lines gzip files, a schema, manifest, inventory, and SHA-256 checksums.
-For the planned weather-bearing rebuild and upload, use
-`wildfire_firms_analysis.ipynb`.
+The completed May 11–Aug 22 POC instead has 428,656 candidate rows, 12,924
+unscored positives, and schema-v2 CSV/JSONL at
+`releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22/`.
+Run `notebooks/train_tabular_baseline.ipynb` against that verified release.
 
-## Step 11b: Backfill historical weather and publish a weather-bearing view
+## Step 11b: Later only — backfill historical weather and publish a weather-bearing view
 
-For the 2026-05-11 through 2026-08-22 rebuild, pass the completed candidate
-manifest from Step 11a as the immutable spine. `open_meteo_historical.py`
+After the no-weather POC is verified, a separate weather-bearing experiment
+may pass the completed candidate manifest from Step 11a as its immutable spine.
+`open_meteo_historical.py`
 records that manifest's path, build ID, and content hash, then derives
 compact FIRMS-seeded weather tiles from that view and calls the
 [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)

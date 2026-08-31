@@ -41,7 +41,7 @@ hourly anchors. Neither path changes the immutable current no-weather release:
 - src/wildfire_data/training_grid.py defines the canonical ESRI:102008 1 km lattice and cell-centroid conversion. src/wildfire_data/fire_state_features.py builds availability-gated FIRMS centre/3x3 state summaries, src/wildfire_data/terrain_features.py samples retained ETOPO blocks at a cell centre, and src/wildfire_data/tabular_baseline.py provides the chronological histogram-gradient-boosting baseline.
 - src/wildfire_data/training_dataset.py and src/wildfire_data/build_training_dataset.py persist a bounded positive-only FEDS training view with cutoff-safe FIRMS/terrain features, raw-artifact lineage, and explicit weather missingness. They require terminal FIRMS product/day coverage through each usable feature interval and expose rows only through a completed-build manifest, so missing or interrupted partitions cannot read as zero evidence.
 - src/wildfire_data/candidate_sampling.py creates deterministic FIRMS-only candidate cells from cutoff-eligible detections. It retains FEDS positives within candidate support, records non-positive candidates only as explicit weak-negative proxies, and separately reports positives with no FIRMS candidate support. It does not claim a clear/no-burn observation mask.
-- `src/wildfire_data/candidate_dataset.py` and `build_candidate_dataset.py` turn exactly one completed positive-view manifest into cutoff-safe FIRMS/terrain candidate rows and atomically publish a completed candidate-view manifest. `export_candidate_dataset.py` materializes that one manifest as a checksum-protected upload directory; it never globs historical artifacts. The first completed view covers 2026-05-31 through 2026-08-10 and has no weather features.
+- `src/wildfire_data/candidate_dataset.py` and `build_candidate_dataset.py` turn exactly one completed positive-view manifest into cutoff-safe FIRMS/terrain candidate rows and atomically publish a completed candidate-view manifest. `merge_candidate_dataset.py` combines contiguous completed chunks without globbing. `export_candidate_dataset.py` materializes that one manifest as a checksum-protected CSV/JSONL upload directory. The completed active view covers 2026-05-11 through 2026-08-22 and has no weather features.
 - `src/wildfire_data/storage_budget.py` and `config/storage_budget.json` account for every byte under `data/`, reject supported writes that would exceed the whole or category caps, and write a scored storage report without changing source records.
 - `src/wildfire_data/wfigs_collection.py` and `src/wildfire_data/collect_wfigs.py` archive paginated WFIGS GeoJSON responses and normalize their reference perimeters with source/timing provenance. This backfill is a `final_reference` label tier; it is not a substitute for historical revision snapshots.
 - `src/wildfire_data/cwfis_active_fires.py` and `src/wildfire_data/collect_cwfis_active_fires.py` archive CWFIS active-fire record versions in deterministic `record_start,id` order. `record_start`/`record_end` are retained as Canadian operational incident context, never converted into a perimeter/spread label.
@@ -61,10 +61,11 @@ hourly anchors. Neither path changes the immutable current no-weather release:
 - `src/wildfire_data/collection_catalog.py` and `src/wildfire_data/source_snapshots.py` define the next source adapters and give them the same immutable evidence and coverage-ledger path.
 - `src/wildfire_data/collection_planning.py` expands a source cadence into explicit expected windows and reports missing, failed, or partial windows for retry.
 
-The completed 2026-05-31 through 2026-08-10 release remains weather-free as a
-past artifact. The next historical rebuild may use archived Open-Meteo
-Historical Weather API ECMWF IFS (`ecmwf_ifs`) values at candidate tiles and
-hourly prediction anchors, explicitly labelled `historical_analysis`.
+The completed 2026-05-11 through 2026-08-22 release is explicitly no-weather;
+only after it is verified may a separate historical rebuild use
+archived Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values at
+candidate tiles and hourly prediction anchors, explicitly labelled
+`historical_analysis`. See [the no-weather POC guide](no-weather-poc.md).
 Separately, only forward Single Runs capture artifacts can support an
 operational issued-forecast as-of feature join.
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import re
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -63,6 +64,10 @@ DEFAULT_FIRMS_REGION = "United States and Canada"
 FIRMS_COVERAGE_POLICY = "require-terminal-product-day-through-availability-cutoff/v1"
 DEFAULT_LABEL_BATCH_SIZE = 5_000
 DEFAULT_TERRAIN_CACHE_BLOCKS = 2
+
+FEDS_LABEL_COVERAGE_SOURCE = "wildfire-data training pipeline"
+FEDS_LABEL_COVERAGE_PRODUCT = "feds-weak-labels"
+_NORMALIZED_ARTIFACT_ID_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 FEDS_WEAK_POSITIVE_OBSERVABILITY = "satellite-weak-positive-only"
 WEATHER_FEATURE_STATUS = "unavailable-no-issued-forecast-features"
@@ -309,11 +314,100 @@ def build_and_store_feds_weak_positive_training_dataset(
 
 
 def iter_feds_weak_positive_label_paths(data_root: str | Path) -> tuple[Path, ...]:
-    """Return retained FEDS weak-label artifacts in deterministic path order."""
+    """Return the current FEDS weak-label artifacts in deterministic path order.
+
+    FEDS label artifacts are immutable, so a refreshed source window leaves
+    its earlier revision on disk.  When the coverage ledger has selected
+    normalized artifact identities, it is the authoritative current view:
+    choose the newest successful artifact for each expected label scope
+    rather than globbing every historical revision.  Legacy archives created
+    before label coverage recorded artifact identities keep the original
+    filesystem fallback.
+    """
     root = Path(data_root) / "normalized" / "training-labels"
-    if not root.exists():
-        return ()
-    return tuple(sorted(path for path in root.rglob("*.jsonl.gz") if path.is_file()))
+    selected_artifact_ids = _selected_feds_weak_positive_label_artifact_ids(data_root)
+    if selected_artifact_ids is None:
+        if not root.exists():
+            return ()
+        return tuple(sorted(path for path in root.rglob("*.jsonl.gz") if path.is_file()))
+    return _resolve_selected_feds_weak_positive_label_paths(root, selected_artifact_ids)
+
+
+def _selected_feds_weak_positive_label_artifact_ids(
+    data_root: str | Path,
+) -> tuple[str, ...] | None:
+    """Return ledger-selected label artifact IDs, or ``None`` for legacy data.
+
+    A later partial outcome cannot replace a prior completed positive-label
+    artifact: partial FEDS windows intentionally have no artifact when they
+    show no positive expansion.  This mirrors the source-snapshot selection
+    rule and considers only complete coverage entries with an explicit
+    immutable artifact identity.
+    """
+    latest_by_expected_id: dict[str, str] = {}
+    found_selection_metadata = False
+    expected_prefix = f"feds-weak-labels:{FEDS_LABEL_BUILD_VERSION}:"
+    for record in CoverageLedger(data_root).entries():
+        if (
+            record.source != FEDS_LABEL_COVERAGE_SOURCE
+            or record.product != FEDS_LABEL_COVERAGE_PRODUCT
+            or record.status is not CoverageStatus.COMPLETE
+            or record.expected_coverage_id is None
+            or not record.expected_coverage_id.startswith(expected_prefix)
+        ):
+            continue
+        artifact_id = _normalized_artifact_id_from_feds_label_coverage(record)
+        if artifact_id is None:
+            continue
+        found_selection_metadata = True
+        latest_by_expected_id[record.expected_coverage_id] = artifact_id
+    if not found_selection_metadata:
+        return None
+    return tuple(sorted(set(latest_by_expected_id.values())))
+
+
+def _normalized_artifact_id_from_feds_label_coverage(record: CoverageRecord) -> str | None:
+    """Read one selected label artifact identity from an immutable ledger entry."""
+    try:
+        document = json.loads(record.path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrainingDatasetError(
+            f"could not read FEDS weak-label coverage record: {record.path}"
+        ) from exc
+    detail = document.get("detail")
+    artifact_id = detail.get("normalized_artifact_id") if isinstance(detail, Mapping) else None
+    if artifact_id is None:
+        return None
+    if not isinstance(artifact_id, str) or not _NORMALIZED_ARTIFACT_ID_PATTERN.fullmatch(artifact_id):
+        raise TrainingDatasetError(
+            "FEDS weak-label coverage has an invalid normalized artifact identity: "
+            f"{record.path}"
+        )
+    return artifact_id
+
+
+def _resolve_selected_feds_weak_positive_label_paths(
+    root: Path,
+    artifact_ids: Sequence[str],
+) -> tuple[Path, ...]:
+    """Resolve each ledger-selected immutable label artifact exactly once."""
+    expected_names = {f"{artifact_id}.jsonl.gz": artifact_id for artifact_id in artifact_ids}
+    matches: dict[str, list[Path]] = {artifact_id: [] for artifact_id in artifact_ids}
+    if root.exists():
+        for path in root.rglob("*.jsonl.gz"):
+            artifact_id = expected_names.get(path.name)
+            if artifact_id is not None and path.is_file():
+                matches[artifact_id].append(path)
+    resolved = []
+    for artifact_id in artifact_ids:
+        paths = matches[artifact_id]
+        if len(paths) != 1:
+            state = "missing" if not paths else "ambiguous"
+            raise TrainingDatasetError(
+                f"selected FEDS weak-label artifact is {state}: {artifact_id}"
+            )
+        resolved.append(paths[0])
+    return tuple(sorted(resolved))
 
 
 def iter_training_examples(
@@ -430,7 +524,14 @@ def _selected_training_dataset_manifest(
     if manifest_path is not None:
         candidate = Path(manifest_path)
         if not candidate.is_absolute():
-            candidate = data_root / candidate
+            working_directory_path = candidate.resolve()
+            resolved_data_root = data_root.resolve()
+            candidate = (
+                working_directory_path
+                if working_directory_path.is_file()
+                and working_directory_path.is_relative_to(resolved_data_root)
+                else data_root / candidate
+            )
         return _read_completed_training_dataset_manifest(candidate, required=True)
     manifest_root = data_root / "manifests" / "training-dataset-builds"
     if not manifest_root.exists():

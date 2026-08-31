@@ -13,8 +13,10 @@ prove forecast availability at an example's cutoff.
 
 from __future__ import annotations
 
+import csv
 import gzip
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -61,7 +63,12 @@ from .training_grid import (
 CANDIDATE_DATASET_SCHEMA_VERSION = 1
 CANDIDATE_DATASET_BUILD_VERSION = "firms-feds-weak-candidate-tabular-1km-12h/v1"
 CANDIDATE_DATASET_MANIFEST_SCHEMA_VERSION = 1
-CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION = 1
+# v2 adds a CSV representation alongside the original JSONL payload.  Keep
+# accepting v1 releases when a caller asks to reuse an existing destination:
+# historical exports remain immutable and should not have to be regenerated
+# just to add an optional convenience format.
+CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION = 2
+LEGACY_CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION = 1
 DEFAULT_CANDIDATE_RADIUS_CELLS = 2
 DEFAULT_MAX_WEAK_NEGATIVE_PROXIES_PER_SNAPSHOT = 2_000
 # The retained package currently contains 47 compact source blocks.  Keeping
@@ -429,6 +436,8 @@ def export_candidate_dataset_release(
     try:
         candidate_path = stage / "candidate_examples.jsonl.gz"
         diagnostic_path = stage / "unscored_positives.jsonl.gz"
+        candidate_csv_path = stage / "candidate_examples.csv.gz"
+        diagnostic_csv_path = stage / "unscored_positives.csv.gz"
         candidate_count, candidate_content_sha256 = _concatenate_jsonl_gzip(
             root,
             manifest["candidate_artifact_relative_paths"],
@@ -439,7 +448,32 @@ def export_candidate_dataset_release(
             manifest["unscored_artifact_relative_paths"],
             diagnostic_path,
         )
-        schema = _release_schema()
+        (
+            candidate_csv_count,
+            candidate_csv_content_sha256,
+            candidate_csv_columns,
+        ) = _concatenate_csv_gzip(
+            root,
+            manifest["candidate_artifact_relative_paths"],
+            candidate_csv_path,
+        )
+        (
+            unscored_csv_count,
+            unscored_csv_content_sha256,
+            unscored_csv_columns,
+        ) = _concatenate_csv_gzip(
+            root,
+            manifest["unscored_artifact_relative_paths"],
+            diagnostic_csv_path,
+        )
+        if candidate_csv_count != candidate_count or unscored_csv_count != unscored_count:
+            raise CandidateDatasetError(
+                "CSV release row counts do not match the corresponding JSONL payloads"
+            )
+        schema = _release_schema(
+            candidate_csv_columns=candidate_csv_columns,
+            unscored_csv_columns=unscored_csv_columns,
+        )
         _write_json_file(stage / "schema.json", schema)
         release_manifest = {
             "schema_version": CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION,
@@ -453,6 +487,10 @@ def export_candidate_dataset_release(
             "unscored_positive_count": unscored_count,
             "candidate_examples_content_sha256": candidate_content_sha256,
             "unscored_positives_content_sha256": unscored_content_sha256,
+            "candidate_examples_csv_content_sha256": candidate_csv_content_sha256,
+            "unscored_positives_csv_content_sha256": unscored_csv_content_sha256,
+            "candidate_examples_csv_columns": list(candidate_csv_columns),
+            "unscored_positives_csv_columns": list(unscored_csv_columns),
             "weather": {
                 "available": False,
                 "status": NO_WEATHER_STATUS,
@@ -1229,10 +1267,21 @@ def _release_is_equivalent(
 
     Re-running a deterministic immutable build gets a new manifest ID even
     when every candidate artifact is reused. Compare the uncompressed JSONL
-    bytes in that case, rather than forcing users to create duplicate upload
-    directories. The files themselves are hashed; an existing manifest's
-    claims are not trusted as proof.
+    bytes (and, for v2 releases, the canonical CSV bytes) in that case,
+    rather than forcing users to create duplicate upload directories. The
+    files themselves are hashed; an existing manifest's claims are not
+    trusted as proof.
+
+    Schema v1 is intentionally accepted with its original JSONL-only
+    contract. Reusing such an immutable historical release preserves the
+    exporter behaviour that predated the CSV convenience files.
     """
+    existing_schema_version = existing.get("schema_version")
+    if existing_schema_version not in {
+        LEGACY_CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION,
+        CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION,
+    }:
+        return False
     source_document = _read_json(
         candidate_manifest["path"], "candidate dataset manifest"
     )
@@ -1288,9 +1337,64 @@ def _release_is_equivalent(
         )
     except (OSError, EOFError):
         return False
-    return (
+    jsonl_is_equivalent = (
         actual_candidate_digest == expected_candidate_digest
         and actual_unscored_digest == expected_unscored_digest
+    )
+    if not jsonl_is_equivalent:
+        return False
+    if existing_schema_version == LEGACY_CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION:
+        return True
+
+    (
+        expected_candidate_csv_digest,
+        candidate_csv_count,
+        candidate_csv_columns,
+    ) = _csv_artifact_payload_digest(
+        data_root,
+        candidate_manifest["candidate_artifact_relative_paths"],
+    )
+    (
+        expected_unscored_csv_digest,
+        unscored_csv_count,
+        unscored_csv_columns,
+    ) = _csv_artifact_payload_digest(
+        data_root,
+        candidate_manifest["unscored_artifact_relative_paths"],
+    )
+    if candidate_csv_count != expected_candidate_count or unscored_csv_count != expected_unscored_count:
+        raise CandidateDatasetError("candidate manifest row counts do not match its CSV payload")
+    if (
+        existing.get("candidate_examples_csv_content_sha256")
+        != expected_candidate_csv_digest
+        or existing.get("unscored_positives_csv_content_sha256")
+        != expected_unscored_csv_digest
+        or existing.get("candidate_examples_csv_columns") != list(candidate_csv_columns)
+        or existing.get("unscored_positives_csv_columns") != list(unscored_csv_columns)
+    ):
+        return False
+    try:
+        actual_candidate_csv_digest = _gzip_payload_sha256(
+            destination / "candidate_examples.csv.gz"
+        )
+        actual_unscored_csv_digest = _gzip_payload_sha256(
+            destination / "unscored_positives.csv.gz"
+        )
+        actual_candidate_csv_columns, actual_candidate_csv_count = _gzip_csv_layout(
+            destination / "candidate_examples.csv.gz"
+        )
+        actual_unscored_csv_columns, actual_unscored_csv_count = _gzip_csv_layout(
+            destination / "unscored_positives.csv.gz"
+        )
+    except (CandidateDatasetError, OSError, EOFError, UnicodeDecodeError, csv.Error):
+        return False
+    return (
+        actual_candidate_csv_digest == expected_candidate_csv_digest
+        and actual_unscored_csv_digest == expected_unscored_csv_digest
+        and actual_candidate_csv_columns == candidate_csv_columns
+        and actual_unscored_csv_columns == unscored_csv_columns
+        and actual_candidate_csv_count == expected_candidate_count
+        and actual_unscored_csv_count == expected_unscored_count
     )
 
 
@@ -1327,6 +1431,143 @@ def _jsonl_artifact_payload_digest(
     return digest.hexdigest(), count
 
 
+def _concatenate_csv_gzip(
+    data_root: Path,
+    relative_paths: Sequence[str],
+    destination: Path,
+) -> tuple[int, str, tuple[str, ...]]:
+    """Write canonical CSV rows for one JSONL artifact sequence.
+
+    CSV is a convenience representation of the self-contained candidate
+    release. The JSONL copies remain the lossless source-format payload. Each
+    nested list or object is encoded as compact, sorted-key JSON so lineage
+    fields can be safely loaded as strings without Python repr differences.
+    """
+    column_names = _csv_columns_from_artifacts(data_root, relative_paths)
+    with gzip.GzipFile(destination, mode="wb", mtime=0) as compressed:
+        text = io.TextIOWrapper(compressed, encoding="utf-8", newline="")
+        try:
+            count = _write_csv_payload(
+                text,
+                data_root=data_root,
+                relative_paths=relative_paths,
+                column_names=column_names,
+            )
+            text.flush()
+        finally:
+            # Do not let TextIOWrapper close the GzipFile before its footer is
+            # emitted by the surrounding context manager.
+            text.detach()
+    return count, _gzip_payload_sha256(destination), column_names
+
+
+def _csv_artifact_payload_digest(
+    data_root: Path,
+    relative_paths: Sequence[str],
+) -> tuple[str, int, tuple[str, ...]]:
+    """Hash the exact canonical CSV bytes an upload export would contain."""
+    column_names = _csv_columns_from_artifacts(data_root, relative_paths)
+    sink = _CsvPayloadDigest()
+    count = _write_csv_payload(
+        sink,
+        data_root=data_root,
+        relative_paths=relative_paths,
+        column_names=column_names,
+    )
+    return sink.hexdigest(), count, column_names
+
+
+def _csv_columns_from_artifacts(
+    data_root: Path,
+    relative_paths: Sequence[str],
+) -> tuple[str, ...]:
+    """Return one deterministic CSV header for the selected artifact rows."""
+    columns: set[str] = set()
+    for relative_path in relative_paths:
+        path = data_root / relative_path
+        for record in _iter_jsonl_records(path, context="release record"):
+            for key in record:
+                if not isinstance(key, str) or not key:
+                    raise CandidateDatasetError("release CSV columns must be non-empty strings")
+                columns.add(key)
+    return tuple(sorted(columns))
+
+
+def _write_csv_payload(
+    stream: Any,
+    *,
+    data_root: Path,
+    relative_paths: Sequence[str],
+    column_names: Sequence[str],
+) -> int:
+    """Write canonical CSV header and rows to a text stream; return row count."""
+    writer = csv.DictWriter(
+        stream,
+        fieldnames=tuple(column_names),
+        extrasaction="raise",
+        lineterminator="\n",
+    )
+    if column_names:
+        writer.writeheader()
+    count = 0
+    for relative_path in relative_paths:
+        path = data_root / relative_path
+        for record in _iter_jsonl_records(path, context="release record"):
+            writer.writerow(
+                {
+                    column: _canonical_csv_value(record.get(column))
+                    for column in column_names
+                }
+            )
+            count += 1
+    return count
+
+
+def _canonical_csv_value(value: Any) -> str:
+    """Return one stable CSV field while preserving nested JSON lineage."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, Mapping):
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    if isinstance(value, (list, tuple)):
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    raise CandidateDatasetError(
+        "release CSV cannot encode a value of type " + type(value).__name__
+    )
+
+
+class _CsvPayloadDigest:
+    """Text writer accepted by :mod:`csv` that hashes each emitted UTF-8 byte."""
+
+    def __init__(self) -> None:
+        self._digest = hashlib.sha256()
+
+    def write(self, value: str) -> int:
+        self._digest.update(value.encode("utf-8"))
+        return len(value)
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+
 def _release_jsonl_line(record: Mapping[str, Any]) -> bytes:
     return (
         json.dumps(
@@ -1348,10 +1589,44 @@ def _gzip_payload_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _release_schema() -> dict[str, Any]:
+def _gzip_csv_layout(path: Path) -> tuple[tuple[str, ...], int]:
+    """Return a CSV payload's header and row count without inferring types."""
+    with gzip.open(path, "rt", encoding="utf-8", newline="") as source:
+        reader = csv.reader(source)
+        try:
+            header = tuple(next(reader))
+        except StopIteration:
+            return (), 0
+        if not header or len(set(header)) != len(header):
+            raise CandidateDatasetError("release CSV has an invalid header")
+        return header, sum(1 for _ in reader)
+
+
+def _release_schema(
+    *,
+    candidate_csv_columns: Sequence[str],
+    unscored_csv_columns: Sequence[str],
+) -> dict[str, Any]:
     return {
         "schema_version": CANDIDATE_DATASET_RELEASE_SCHEMA_VERSION,
-        "format": "gzip-compressed JSON Lines",
+        "format": "gzip-compressed JSON Lines and CSV",
+        "formats": {
+            "candidate_examples": {
+                "jsonl_gzip_path": "candidate_examples.jsonl.gz",
+                "csv_gzip_path": "candidate_examples.csv.gz",
+                "csv_columns": list(candidate_csv_columns),
+            },
+            "unscored_positives": {
+                "jsonl_gzip_path": "unscored_positives.jsonl.gz",
+                "csv_gzip_path": "unscored_positives.csv.gz",
+                "csv_columns": list(unscored_csv_columns),
+            },
+        },
+        "csv_encoding": {
+            "nested_values": "canonical-json-sorted-keys-compact/v1",
+            "null_values": "empty-field",
+            "boolean_values": "lowercase-json-literals",
+        },
         "candidate_dataset_build_version": CANDIDATE_DATASET_BUILD_VERSION,
         "model_feature_columns": list(DEFAULT_MODEL_FEATURE_COLUMNS),
         "target_column": "target_newly_burned_12h",
@@ -1388,9 +1663,12 @@ Files:
 
 - `candidate_examples.jsonl.gz`: fit-eligible weak positives and FIRMS-seeded
   weak-negative proxies.
+- `candidate_examples.csv.gz`: the same candidate rows in a tabular format;
+  nested lineage values use canonical compact JSON strings.
 - `unscored_positives.jsonl.gz`: FEDS positives outside FIRMS candidate
   support; retain these for coverage diagnostics rather than treating them as
   negatives or dropping them.
+- `unscored_positives.csv.gz`: the same diagnostic rows in CSV form.
 - `dataset_manifest.json`, `schema.json`, `file_inventory.json`, and
   `SHA256SUMS`: version, schema, and integrity information.
 

@@ -34,6 +34,23 @@ FEDS snapshots(t) + FEDS snapshots(t+12 h) ──> 1 km newly-burned positives
 Optional issued forecast weather ──> separate forward-only operational experiment
 ```
 
+## Active no-weather proof of concept
+
+The current build target is a **no-weather** CSV candidate release for source
+snapshots from 2026-05-11 through 2026-08-22. It uses FIRMS from 2026-05-10
+through 2026-08-22, FEDS source snapshots through 2026-08-23, and sampled
+ETOPO terrain. Open-Meteo collection and joins are deliberately deferred; a
+POC row declares weather unavailable rather than substituting an unarchived
+value.
+
+The completed candidate manifest is exported as schema-v2
+`candidate_examples.csv.gz` (with an equivalent JSONL stream), then
+[`notebooks/train_tabular_baseline.ipynb`](../notebooks/train_tabular_baseline.ipynb)
+verifies the release before training. It reads the manifest's exact feature
+allowlist and keeps whole `source_snapshot_time` groups on one side of the
+chronological holdout. See [the no-weather POC guide](no-weather-poc.md) for
+the reproducible build/release sequence and its weak-label limits.
+
 `FEDS` labels share satellite evidence with FIRMS and are therefore not
 independent ground truth. They are useful for an initial weak-label baseline,
 but each output must retain label tier, source IDs, source snapshot times, and
@@ -76,7 +93,9 @@ time-alignment method.
    features, and atomically publishes the candidate view. It writes target=0
    only as `weak_negative_proxy` and puts FIRMS-uncovered positives in a
    separate diagnostic stream. `export_candidate_dataset.py` creates the
-   checksum-protected upload directory from that manifest alone.
+   checksum-protected upload directory from that manifest alone. Schema-v2
+   exports contain `candidate_examples.csv.gz` for tabular fitting plus
+   matching JSONL and unscored-diagnostic payloads.
 9. `open_meteo_historical.py` reads a completed base candidate view, plans
    compact candidate weather tiles, and captures rate-limited hourly Open-Meteo
    Historical Weather API ECMWF IFS values per candidate date. It writes raw
@@ -97,8 +116,12 @@ Follow the collection commands in this order:
 5. [Collect terrain](collecting-data.md#step-10-collect-terrain-source-blocks) — static terrain values.
 6. [Build the positive-only view](collecting-data.md#step-11-build-the-positive-only-tabular-training-view) — joined, lineage-rich positive rows.
 7. [Build the base candidate view](collecting-data.md#step-11a-build-a-candidate-view-current-release-command) — binary weak-label rows and immutable spine.
-8. [Backfill and join historical weather](collecting-data.md#step-11b-backfill-historical-weather-and-publish-a-weather-bearing-view) — ECMWF IFS tile/hour features and a separate uploadable view.
-9. [Audit the cap](collecting-data.md#step-14-audit-the-finished-local-package) — make sure the full data tree remains under 20 GB.
+8. [Export the candidate release](no-weather-poc.md#build-and-export) — schema-v2 CSV plus provenance/checksums.
+9. [Run the tabular-baseline notebook](../notebooks/train_tabular_baseline.ipynb) — verify the release and fit the chronological weak-label baseline.
+10. [Audit the cap](collecting-data.md#step-14-audit-the-finished-local-package) — make sure the full data tree remains under 20 GB.
+
+Historical-weather backfill is intentionally outside this POC and is only a
+later, separate candidate view.
 
 WFIGS and CWFIS collection add validation and incident context, but neither
 creates the initial 12-hour target. The Level-2 inventory and NALCMS archives
@@ -117,9 +140,10 @@ target=0 only as explicitly named `weak_negative_proxy` rows. Positives
 outside FIRMS support remain separate unscored diagnostics. This does not
 claim clear/no-burn coverage.
 
-That wiring is complete for the retained archive. The completed view has
-305,528 rows: 19,528 supported weak positives and 286,000 weak-negative
-proxies, plus 11,848 FIRMS-uncovered positives in a separate diagnostic file.
+That wiring is complete for the retained archive. The completed May 11–August
+22 view has 428,656 rows: 22,656 supported weak positives and 406,000
+weak-negative proxies, plus 12,924 FIRMS-uncovered positives in a separate
+diagnostic file.
 It has a whole-source-snapshot chronological split and an explicit numeric
 feature allowlist. Load only the manifest-selected rows, pass that allowlist to
 `train_tabular_baseline`, and use `split_group_column="source_snapshot_time"`.
@@ -130,10 +154,11 @@ through the contracted, archived Open-Meteo Historical Weather API/ECMWF IFS
 path and must remain explicitly marked as retrospective analysis; do not
 substitute an unversioned reanalysis or latest-endpoint lookup.
 
-## Weather and wind direction
+## Weather and wind direction — after the POC
 
-Weather is absent only from the completed 2026-05-31 through 2026-08-10
-release. The 2026-05-11 through 2026-08-22 rebuild should backfill the
+Weather is deliberately absent from the active 2026-05-11 through 2026-08-22
+POC as well as the completed 2026-05-31 through 2026-08-10 release. Only after
+the POC is verified may a separate candidate view backfill the
 [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
 with `models=ecmwf_ifs` at every planned candidate tile and each row's hourly
 weather anchor. `floor_weather_hour` derives the feature's `weather_observed_at`

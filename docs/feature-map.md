@@ -85,8 +85,8 @@ FIRMS feature builder, ETOPO sampler, positive-only training-table builder,
 chronological tabular baseline, FIRMS-only candidate sampler, candidate-view
 publisher, and release exporter are implemented. The completed candidate view
 makes target=0 rows only as named weak-negative proxies and preserves positives
-without FIRMS candidate support as unscored diagnostics. The first retained
-range is 2026-05-31 through 2026-08-10. Even with the completed wiring:
+without FIRMS candidate support as unscored diagnostics. The completed active
+range is 2026-05-11 through 2026-08-22. Even with the completed wiring:
 
 - no absent FEDS label may become a zero;
 - no unarchived or unversioned weather lookup may become a weather feature;
@@ -97,6 +97,11 @@ range is 2026-05-31 through 2026-08-10. Even with the completed wiring:
   baseline rather than an operational wildfire-spread predictor; a later
   historical-weather model remains retrospective analysis, not an issued-
   forecast model.
+
+The active 2026-05-11 through 2026-08-22 proof of concept deliberately keeps
+weather unavailable while it rebuilds a coherent CSV candidate release and
+fits the first baseline. Its required FIRMS/FEDS boundaries, CSV contract,
+label policy, and notebook workflow are in [the no-weather POC guide](no-weather-poc.md).
 
 See [the training pipeline](training-pipeline.md) and
 [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md) for the fixed

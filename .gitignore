@@ -6,3 +6,6 @@ __pycache__/
 data/
 .venv
 *.gz
+*.joblib
+artifacts/
+releases/

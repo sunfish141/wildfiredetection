@@ -1,5 +1,6 @@
 import gzip
 import json
+import os
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -8,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from wildfire_data.data_archive import CoverageLedger, CoverageStatus
+from wildfire_data.feds_labels import FEDS_LABEL_BUILD_VERSION
 from wildfire_data.normalized_storage import write_normalized_jsonl
 from wildfire_data.storage_budget import load_storage_budget
 from wildfire_data.terrain_features import TerrainFeatureSampler
@@ -17,6 +19,7 @@ from wildfire_data.training_dataset import (
     TrainingDatasetError,
     assemble_feds_weak_positive_examples,
     build_and_store_feds_weak_positive_training_dataset,
+    iter_feds_weak_positive_label_paths,
     iter_training_examples,
 )
 from wildfire_data.training_grid import TrainingExampleKey, cell_from_wgs84
@@ -224,14 +227,140 @@ class TrainingDatasetTests(unittest.TestCase):
                 end_date=date(2026, 7, 2),
             )
             stored_rows = list(iter_training_examples(root))
+            original_directory = Path.cwd()
+            try:
+                os.chdir(root.parent)
+                prefixed_manifest_path = Path("data") / result.manifest_path.relative_to(root)
+                prefixed_rows = list(
+                    iter_training_examples(
+                        Path("data"),
+                        manifest_path=prefixed_manifest_path,
+                    )
+                )
+            finally:
+                os.chdir(original_directory)
 
         self.assertEqual(result.input_label_count, 1)
         self.assertEqual(result.training_row_count, 1)
         self.assertEqual(result.normalized_artifact_count, 1)
         self.assertEqual(len(stored_rows), 1)
+        self.assertEqual(len(prefixed_rows), 1)
         self.assertEqual(stored_rows[0]["label_raw_artifact_ids"], ["feds-current", "feds-future"])
         self.assertEqual(stored_rows[0]["firms_raw_artifact_ids"], ["firms-in-range"])
         self.assertEqual(stored_rows[0]["firms_center_detection_count"], 1)
+
+    def test_archive_builder_selects_latest_completed_feds_label_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            _write_terrain_block(root, self.cell)
+            first_artifact = write_normalized_jsonl(
+                root,
+                entity="training_labels",
+                records=[_label(self.cell, positive_overlap_fraction=0.25)],
+                partitions={
+                    "source": "feds-perimeter-difference",
+                    "source_snapshot": "2026-07-02T00:00:00Z",
+                    "target_snapshot": "2026-07-02T12:00:00Z",
+                    "grid": "naea-1km",
+                },
+                raw_artifact_ids=["feds-first-current", "feds-first-future"],
+                transformation_version=FEDS_LABEL_BUILD_VERSION,
+            )
+            refreshed_artifact = write_normalized_jsonl(
+                root,
+                entity="training_labels",
+                records=[_label(self.cell, positive_overlap_fraction=0.50)],
+                partitions={
+                    "source": "feds-perimeter-difference",
+                    "source_snapshot": "2026-07-02T00:00:00Z",
+                    "target_snapshot": "2026-07-02T12:00:00Z",
+                    "grid": "naea-1km",
+                },
+                raw_artifact_ids=["feds-refreshed-current", "feds-refreshed-future"],
+                transformation_version=FEDS_LABEL_BUILD_VERSION,
+            )
+            expected_coverage_id = (
+                f"feds-weak-labels:{FEDS_LABEL_BUILD_VERSION}:United States and Canada:"
+                "2026-07-02T00:00:00Z:estimated-local-solar-to-utc/v1:overlap=0.100000"
+            )
+            ledger = CoverageLedger(root)
+            ledger.record(
+                source="wildfire-data training pipeline",
+                product="feds-weak-labels",
+                coverage_start="2026-07-02T00:00:00Z",
+                coverage_end="2026-07-02T12:00:00Z",
+                region="United States and Canada",
+                expected_coverage_id=expected_coverage_id,
+                status=CoverageStatus.COMPLETE,
+                detail={"normalized_artifact_id": first_artifact.normalized_artifact_id},
+                recorded_at=datetime(2026, 8, 1, tzinfo=UTC),
+            )
+            ledger.record(
+                source="wildfire-data training pipeline",
+                product="feds-weak-labels",
+                coverage_start="2026-07-02T00:00:00Z",
+                coverage_end="2026-07-02T12:00:00Z",
+                region="United States and Canada",
+                expected_coverage_id=expected_coverage_id,
+                status=CoverageStatus.COMPLETE,
+                detail={"normalized_artifact_id": refreshed_artifact.normalized_artifact_id},
+                recorded_at=datetime(2026, 8, 2, tzinfo=UTC),
+            )
+            write_normalized_jsonl(
+                root,
+                entity="fire_detections",
+                records=[
+                    _detection(
+                        self.cell,
+                        identifier="in-range",
+                        acquired_at="2026-07-02T08:00:00Z",
+                        raw_artifact_id="firms-in-range",
+                    )
+                ],
+                partitions={"acq_date": "2026-07-02"},
+                raw_artifact_ids=["firms-in-range"],
+                transformation_version="firms-normalized/v1",
+            )
+            _record_terminal_firms_coverage(
+                root,
+                dates=(date(2026, 7, 1), date(2026, 7, 2)),
+            )
+            policy_path = Path(directory) / "budget.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "whole_data_cap_bytes": 10_000_000,
+                        "whole_data_cap_label": "test",
+                        "scope": "test",
+                        "categories": [
+                            {
+                                "key": "derived_training_views",
+                                "cap_bytes": 10_000_000,
+                                "priority_score": 1,
+                                "pinned": False,
+                                "retention": "test",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                iter_feds_weak_positive_label_paths(root),
+                (refreshed_artifact.artifact_path,),
+            )
+            result = build_and_store_feds_weak_positive_training_dataset(
+                root,
+                storage_budget=load_storage_budget(policy_path),
+                start_date=date(2026, 7, 2),
+                end_date=date(2026, 7, 2),
+            )
+
+        self.assertEqual(result.input_label_count, 1)
+        self.assertEqual(result.training_row_count, 1)
+        self.assertEqual(result.normalized_artifact_count, 1)
 
     def test_uses_the_same_three_hour_default_lag_as_weather_tile_planning(self):
         self.assertEqual(DEFAULT_FIRMS_AVAILABILITY_LAG, timedelta(hours=3))

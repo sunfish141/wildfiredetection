@@ -6,11 +6,11 @@ features, or training behavior.
 
 ## Goal and current boundary
 
-The product takes wildfire evidence—FIRMS locations/TI4 plus weather—and
-returns 1 km cells where fire is likely to spread in the next 12 hours. Cell
-centroids provide the output latitude/longitude. Historical training analysis
-uses retrospective weather; a separate optional path captures issued forecasts
-for future operational experiments.
+The product takes wildfire evidence and returns 1 km cells where fire is likely
+to spread in the next 12 hours. Cell centroids provide the output
+latitude/longitude. The active first proof of concept uses FIRMS and terrain
+without weather; retrospective weather and issued forecasts remain separate
+future experiments.
 
 The repository has a completed **no-weather weak-label candidate dataset**,
 not a trained operational binary spread predictor. It contains FIRMS-supported
@@ -28,13 +28,17 @@ weather-aware forecast or a verified clear/no-burn dataset.
 | FEDS time | The authoritative snapshot timestamp is embedded in the provider primary key. `t` is not substituted as the snapshot identity. A source snapshot becomes a documented per-cell local-solar-to-UTC cutoff estimate. |
 | Current fire features | Unfiltered FIRMS from SNPP, NOAA-20, and NOAA-21. Use a 24-hour lookback and conservative 3-hour availability lag. Preserve all source fields; the 305 K TI4 threshold is not a collection filter. |
 | Static feature | Sample retained ETOPO elevation, slope, and aspect at the 1 km cell centre. NALCMS is source evidence only, not a feature yet. |
-| Weather | The next historical rebuild backfills Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values at each FIRMS-seeded candidate tile and UTC hourly prediction anchor. Mark them `historical_analysis`; they are retrospective conditions, not reconstructed issued forecasts. The separate Open-Meteo Single Runs collector may capture one manually selected model/run for an operational experiment. The completed release remains weather-free as a past artifact. Retain wind as U/V components (or cyclic derivatives), never a raw 0–360° scalar. |
+| Weather | The active 2026-05-11 through 2026-08-22 POC deliberately does not collect, join, or train on weather. Its rows retain explicit unavailable/missing declarations. After the POC is verified, a separate candidate view may backfill Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values at FIRMS-seeded tiles and UTC hourly anchors as `historical_analysis`; it is not a reconstructed issued forecast. The optional Single Runs collector remains a separate operational experiment. |
 | First model | A simple `HistGradientBoostingClassifier` tabular baseline after a valid binary candidate table exists. It is intentionally not a spatial deep-learning cube. |
 | Evaluation split | Chronological and grouped by FEDS `source_snapshot_time`, so all cells from one source snapshot stay on one side of holdout. Never randomly split neighboring cells or source snapshots. |
 | Storage | The complete `data/` tree is hard-capped at 20,000,000,000 bytes. Existing files are counted and never silently evicted. |
 
 The binding rationale is in [ADR 0001](adr/0001-bounded-20gb-local-dataset.md)
 and [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md).
+
+The active POC contract, including its May 10 FIRMS context day, August 23
+FEDS boundary evidence, schema-v2 CSV release, provenance checks, and
+chronological notebook baseline, is [documented separately](no-weather-poc.md).
 
 ## Non-negotiable pipeline rules
 
@@ -77,31 +81,35 @@ and [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md).
 
 ### Source evidence and derived data
 
-- FIRMS was retained for the target period **2026-05-31 through 2026-08-10**,
-  plus the required leading context day **2026-05-30**. The final context-day
-  collection added 3 responses and 2,043 source rows with no retry gaps.
-- FEDS raw responses were replayed through the primary-key normalizer rather
-  than recollected. Do not union two captures: select one coherent capture;
-  semantically conflicting records across captures are real revisions, not
-  duplicates.
-- FEDS labels are built from primary-key snapshot partitions. A no-expansion
-  interval is `partial`, never an `empty-confirmed` global no-spread state.
-- The current completed v3 training view contains **31,376** positive rows in
-  **143** immutable artifacts. Every row has the explicit weather status
-  `unavailable-no-issued-forecast-features`.
-- The completed manifest for the current full range is
-  `data/manifests/training-dataset-builds/2026/08/21/034320260310_3eef915e5aaa483c94908d9204f9b459.json`.
-  It records the source date range, FIRMS products/region, 24-hour lookback,
-  180-minute lag, artifact list, and row count.
+- FIRMS is complete for the POC context/target period **2026-05-10 through
+  2026-08-22**: 98 SNPP, 83 NOAA-20, and 105 NOAA-21 complete daily
+  artifacts, with the remaining SNPP/NOAA-20 days explicitly
+  `empty-confirmed`.
+- FEDS observed/raw source snapshots are complete through **2026-08-23**.
+  The label rebuild selects one latest normalized source artifact per snapshot
+  (it never unions historical revisions). It published 203 complete source
+  windows and five expected `partial` no-positive-expansion windows.
+- The completed positive-only manifest is
+  `data/manifests/training-dataset-builds/2026/08/31/013701963916_7b82974c02774071afbf3b815dd0112a.json`.
+  It contains **35,580** rows in **203** selected immutable artifacts, all
+  with explicit no-weather declarations.
+- ETOPO terrain coverage is complete for the 2,933 FIRMS context tiles; WFIGS
+  (3,139 reference perimeters), CWFIS (12,222 record versions), NALCMS source
+  archives, and a VIIRS Level-2 metadata inventory (18,354 granules) are also
+  retained as non-model context/observability evidence.
 - The completed no-weather candidate view is
-  `data/manifests/candidate-dataset-builds/2026/08/24/040059951477_76e075f405f24287ba9531bea436cbe5.json`.
-  It has **305,528** candidate rows: **19,528** supported weak positives and
-  **286,000** weak-negative proxies. **11,848** positives outside FIRMS
+  `data/manifests/candidate-dataset-builds/2026/08/31/021729652268_27f6f72166ca43c2a2d92c2691deb4eb.json`.
+  It has **428,656** candidate rows: **22,656** supported weak positives and
+  **406,000** weak-negative proxies. **12,924** positives outside FIRMS
   candidate support are retained as unscored diagnostics.
-- The uploadable, self-contained release is
-  `releases/wildfire-spread-firms-feds-no-weather-2026-05-31_to_2026-08-10/`.
-  Its streamed row counts and every SHA-256 checksum were verified.
-- At the latest audit, `data/` used **5,356,093,539 / 20,000,000,000 bytes**.
+- The uploadable, self-contained schema-v2 CSV/JSONL release is
+  `releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22/`.
+  All SHA-256 checksums, CSV row counts, unique example IDs, weather exclusion,
+  and finite numeric feature values were verified.
+- The chronological no-weather tabular baseline was run and persisted under
+  `artifacts/tabular-baseline-201db0d293c56f51/`. On 89,210 validation rows,
+  it obtained ROC-AUC 0.9163 and PR-AUC 0.5408. These are weak-label POC
+  metrics, not operational performance claims.
 
 ### Implemented code
 
@@ -114,7 +122,7 @@ and [ADR 0002](adr/0002-first-1km-12hour-weak-label-baseline.md).
 | `terrain_features.py` | On-demand retained ETOPO cell-centre sampling. |
 | `training_dataset.py` / `build_training_dataset.py` | Coverage-gated positive-only assembly and atomic completed-view publication. |
 | `candidate_sampling.py` / `candidate_dataset.py` / `build_candidate_dataset.py` | Deterministic FIRMS-supported weak candidates, cutoff-safe features, atomic candidate manifest, and unscored-positive diagnostics. |
-| `export_candidate_dataset.py` | Self-contained gzip JSONL upload release with schema, inventory, and SHA-256 checksums. |
+| `export_candidate_dataset.py` | Self-contained gzip CSV/JSONL upload release with schema, inventory, and SHA-256 checksums. |
 | `tabular_baseline.py` | Leakage-gated chronological tabular trainer, metrics, calibration, and persisted feature contract. |
 
 The test suite covers the candidate build, source-range refusal, manifest
@@ -135,11 +143,9 @@ explicit `unobserved-no-clear-no-burn-mask` observability state. A positive
 outside FIRMS support is retained as `unscored-positive-no-firms-candidate`,
 not discarded or relabeled.
 
-The existing positive table shows why this choice matters: only 15,302 of
-31,376 FEDS-positive cells (48.8%) have an eligible FIRMS detection in the
-immediate 3×3 km context at cutoff. A FIRMS-only design must seed/expand an
-incident or fire cluster wider than that local window, or explicitly retain
-the uncovered positives as unscored/excluded cases.
+The sampler expands an eligible FIRMS seed into a bounded incident context.
+It deliberately retains FEDS positives without that support as unscored rather
+than silently treating them as no-spread cases.
 
 ### 2. Define valid target=0 / observation handling
 
@@ -157,7 +163,7 @@ independent validation are added.
 
 ### 3. Backfill historical weather; optionally capture issued forecasts
 
-For the planned 2026-05-11 through 2026-08-22 source rebuild, turn the
+After the no-weather 2026-05-11 through 2026-08-22 POC is complete, turn its
 FIRMS-seeded candidate cells into compact weather tiles, then retrieve hourly
 Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values for each tile
 and each row's prediction cutoff floored to UTC hour. Preserve raw responses,
@@ -204,33 +210,24 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
 # Inspect remaining storage before any collection
 PYTHONPATH=src .venv/bin/python -m wildfire_data.inspect_storage_budget --data-root data
 
-# Rebuild the current full positive-only view after an intentional source update
-PYTHONPATH=src .venv/bin/python -m wildfire_data.build_training_dataset \
-  --start 2026-05-31 \
-  --end 2026-08-10 \
-  --data-root data
-
-# Build and export the coherent no-weather candidate release
-PYTHONPATH=src .venv/bin/python -m wildfire_data.build_candidate_dataset \
-  --start 2026-05-31 \
-  --end 2026-08-10 \
-  --data-root data
-PYTHONPATH=src .venv/bin/python -m wildfire_data.export_candidate_dataset \
-  --data-root data \
-  --candidate-manifest data/manifests/candidate-dataset-builds/2026/08/24/040059951477_76e075f405f24287ba9531bea436cbe5.json \
-  --output releases/wildfire-spread-firms-feds-no-weather-2026-05-31_to_2026-08-10
+# Open `wildfire_firms_analysis.ipynb` in a Jupyter-compatible environment
+# only when intentionally recollecting its full 2026-05-11 through 2026-08-22
+# range. Set WILDFIRE_RUN_NON_WEATHER_PIPELINE=1 in that notebook environment.
+# It builds seven-day candidate chunks with a 24-block terrain cache and merges
+# their manifests. Then run `notebooks/train_tabular_baseline.ipynb` to verify
+# and fit the already published upload release.
 ```
 
 The build commands are idempotent at the immutable-artifact level and publish
 new completed manifests only if all source coverage checks pass. For a full
 from-scratch collection, use the ordered commands in
-[Collecting data](collecting-data.md); it includes the May 30 FIRMS context
-day and August 11 FEDS boundary snapshot.
+[the no-weather POC guide](no-weather-poc.md); it includes the May 10 FIRMS
+context day and August 23 FEDS boundary snapshot.
 
-To create the requested weather-bearing 2026-05-11 through 2026-08-22 range,
-first retain FIRMS for 2026-05-10 through 2026-08-22 and FEDS source snapshots
-through 2026-08-23. Rebuild FEDS labels, terrain blocks, the positive view,
-and a completed base candidate view. Then
+To create a later weather-bearing version of the 2026-05-11 through 2026-08-22
+range, first complete and verify the no-weather POC: FIRMS must cover
+2026-05-10 through 2026-08-22, FEDS source snapshots must cover through
+2026-08-23, and the positive/candidate views must have completed manifests. Then
 `open_meteo_historical.backfill_open_meteo_historical_weather` backfills hourly
 Open-Meteo Historical Weather API ECMWF IFS values at every candidate tile and
 row anchor. If it pauses, pass its partial manifest as `resume_manifest` to

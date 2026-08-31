@@ -1,27 +1,55 @@
 # Uploadable wildfire spread candidate dataset
 
-## Completed release
+## Active no-weather POC release
+
+The active proof of concept rebuilds the no-weather range 2026-05-11 through
+2026-08-22 and exports it to:
+
+```text
+releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22/
+```
+
+This target directory is only a completed release after its own
+`dataset_manifest.json` has been published. Its schema-v2 export uses
+`candidate_examples.csv.gz` as the fit-eligible tabular input, with the same
+rows retained in JSONL. `unscored_positives.csv.gz` is diagnostic evidence,
+not extra training data. The POC is explicitly weather-free; it must not run
+Open-Meteo collection or add weather columns. See [the no-weather POC guide](no-weather-poc.md)
+for source boundaries, build commands, label semantics, and the training
+notebook workflow.
+
+### Schema-v2 CSV contract
+
+`schema.json` lists the exact CSV columns and documents canonical compact,
+sorted-key JSON strings for nested values. `dataset_manifest.json` records the
+candidate build identity, CSV payload digests, row counts, weather status, and
+ordered `model_feature_columns`; `SHA256SUMS` verifies every released file.
+The trainer must verify those files before loading
+`candidate_examples.csv.gz`, use only the manifest feature allowlist, and
+keep `unscored_positives` out of fitting.
+
+## Completed active release
 
 The current self-contained release is:
 
 ```text
-releases/wildfire-spread-firms-feds-no-weather-2026-05-31_to_2026-08-10/
+releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22/
 ```
 
 It is a no-weather, 1 km, 12-hour weak-label research dataset covering source
-snapshots from 2026-05-31 through 2026-08-10. It was built only from the
+snapshots from 2026-05-11 through 2026-08-22. It was built only from the
 completed positive-view manifest and is suitable for upload without the local
 raw archive.
 
 | Item | Count |
 | --- | ---: |
-| Candidate rows | 305,528 |
-| FEDS/FIRMS-supported target=1 rows | 19,528 |
-| FIRMS-seeded target=0 weak-negative proxies | 286,000 |
-| Unscored FEDS positives outside FIRMS candidate support | 11,848 |
+| Candidate rows | 428,656 |
+| FEDS/FIRMS-supported target=1 rows | 22,656 |
+| FIRMS-seeded target=0 weak-negative proxies | 406,000 |
+| Unscored FEDS positives outside FIRMS candidate support | 12,924 |
 | Model input fields | 19 |
 
-The release directory contains:
+The release contains:
 
 - `candidate_examples.jsonl.gz` — fit-eligible weak positives and weak-negative
   proxies, with full row lineage and the explicit model-feature allowlist in
@@ -31,11 +59,14 @@ The release directory contains:
 - `dataset_manifest.json`, `schema.json`, `file_inventory.json`, and
   `SHA256SUMS` — provenance, contract, and integrity data.
 
+It is a schema-v2 CSV/JSONL release. The prior May 31–August 10 schema-v1
+JSONL release remains immutable legacy evidence and is not rewritten.
+
 ## Reproduce or rebuild
 
-For the new weather-bearing rebuild, use
-[wildfire_firms_analysis.ipynb](../wildfire_firms_analysis.ipynb) from the
-repository root. To reproduce the past no-weather release, run:
+For the active no-weather POC, follow [the POC guide](no-weather-poc.md) and
+then use [the tabular-baseline notebook](../notebooks/train_tabular_baseline.ipynb).
+To reproduce the past no-weather release, run:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m wildfire_data.build_candidate_dataset \
@@ -55,8 +86,8 @@ PYTHONPATH=src .venv/bin/python -m wildfire_data.export_candidate_dataset \
   --output releases/<new-release-name>
 ```
 
-The exporter reuses an existing release only after verifying its logical JSONL
-payload is byte-equivalent; it never overwrites different content. Verify an
+The exporter reuses an existing release only after verifying its logical
+payloads are byte-equivalent; it never overwrites different content. Verify an
 upload by hashing each path named in `SHA256SUMS` and comparing it to the
 listed digest.
 
@@ -76,26 +107,16 @@ listed digest.
 - The release has only source snapshots with FEDS-positive labels; it does not
   invent all-zero FEDS time windows.
 
-## Extending to the requested summer
+## Legacy reproduction
 
-The retained source archive cannot honestly produce the requested data set for
-2026-05-11 through 2026-08-22 yet. Before requesting that range, collect and
-verify FIRMS for 2026-05-10 through 2026-08-22 and FEDS snapshots for
-2026-05-11 through 2026-08-23. Then rebuild FEDS labels, terrain blocks, the
-positive view, and the candidate view. The date guard in the builder prevents
-mixing a longer request with the current shorter manifest.
+The old 2026-05-31 through 2026-08-10 artifact can be reproduced using its
+legacy commands above. For the completed summer POC, use the bounded chunk and
+merge instructions in [the no-weather POC guide](no-weather-poc.md), then run
+`notebooks/train_tabular_baseline.ipynb` against its verified CSV release.
 
-Backfill weather for the new candidate tiles and each row's UTC hourly
-prediction anchor through the [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
-with `models=ecmwf_ifs`. Retain raw responses, tile/candidate mapping, the
-model, valid hour, retrieval time, and a `historical_analysis` feature mode.
-`open_meteo_historical.backfill_open_meteo_historical_weather` requires and
-records the exact completed base candidate manifest, then writes the immutable
-backfill manifest; only a complete manifest can be joined to that same base
-manifest by
-`weather_candidate_dataset.build_weather_candidate_dataset` and exported as a
-new weather-bearing release. The base candidate view remains unchanged. This
-produces a retrospective weather-analysis dataset, not a reconstructed
-as-issued-forecast dataset. The optional Open-Meteo Single Runs workflow
-continues to support a distinct future operational-forecast experiment with
-model-run and captured-availability provenance.
+Weather is intentionally deferred until this proof of concept is complete. A
+later weather experiment must take the completed base candidate manifest,
+backfill mapped tile/hour values through the
+[Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api),
+and publish a distinct weather-bearing release. The base no-weather view
+remains unchanged; it is not a reconstructed issued-forecast data set.
