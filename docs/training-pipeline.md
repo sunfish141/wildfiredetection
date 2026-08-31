@@ -216,3 +216,99 @@ The model artifact must store its feature list, cutoff/availability policy,
 grid and label versions, metrics, and calibration output. A calibrated result
 can be converted to latitude/longitude only through the predicted canonical
 cell centroids.
+
+## Experimental recursive transition baseline
+
+`recursive_transition.py` wraps the completed no-weather classifier in the
+smallest reproducible state transition needed by an interactive map. A user
+ignition supplies a canonical cell and intensity from zero to one. At every
+12-hour step, active cells are converted to synthetic FIRMS-compatible
+brightness, detection-count, recency, and 3-by-3 neighbourhood features;
+unburned cells in the existing two-cell candidate radius are scored; and a
+fixed probability threshold determines which cells become active next.
+
+The recursive classifier is fitted only on historical candidate rows where
+`firms_center_has_detection = 0`, and it removes all six centre-detection
+features from its input contract. This matches rollout semantics: a candidate
+is unburned before the transition, so it cannot already supply its own active
+FIRMS detection. The model uses the remaining seven 3-by-3 fire-state fields
+and six terrain fields.
+
+This is an application baseline, not a newly trained multi-step model. The
+following transition behavior is deliberately heuristic and versioned:
+
+- intensity maps linearly from 305 K to 367 K synthetic TI4 brightness;
+- intensity maps to one through three synthetic detections;
+- synthetic evidence declares one provider-neutral observation stream rather
+  than inventing satellite-platform identities;
+- active cells persist for two steps by default and retain 85% intensity per
+  step;
+- the default deterministic ignition threshold is 0.05 (approximately 20.3%
+  precision and 90.4% recall on the frontier chronological holdout); and
+- burned cells cannot ignite again during the scenario.
+
+The classifier still supplies only the probability of new burning. Future
+FIRMS brightness, fire persistence, and intensity have not yet been learned or
+validated, and recursive rollouts can accumulate error. The web application
+must label results as an experimental simulation and retain the transition
+parameters with each scenario.
+
+Train and persist this separate frontier model with:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m wildfire_data.train_recursive_transition \
+  --release releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22 \
+  --output artifacts/recursive-frontier-baseline-201db0d293c56f51
+```
+
+### Incremental rollout-training work
+
+Increment 1 adds only the temporal sequence contract in
+`rollout_sequences.py`; it does not retrain either baseline. Candidate rows
+are grouped by whole FEDS `source_snapshot_time`, with every cell from one
+snapshot kept in the same `RolloutSnapshot`. Distinct snapshots continue a
+sequence only when they are exactly 12 hours apart. A larger whole-12-hour gap
+starts a new sequence, while an irregular cadence is rejected.
+
+The sequence metadata stores integer dataframe row positions rather than
+copying examples. This preserves every cell's local-solar-aligned `anchor_at`
+and exact `target_end_at = anchor_at + 12 hours` while allowing later training
+to retrieve a complete snapshot through `snapshot_frame`. It also validates
+that every present FEDS target snapshot is exactly 12 hours after its source
+and that a cell appears at most once in a source snapshot. Weak-negative proxy
+rows correctly retain a missing observed `target_snapshot_time`; sequence
+metadata derives the intended transition endpoint as source plus 12 hours
+without turning that missing observation into a verified negative.
+
+This is preparation for supervised autoregressive rollouts. It does not yet
+feed predictions back into training, generate synthetic examples, or use held
+out snapshots for augmentation.
+
+### Open-loop baseline before augmentation
+
+Increment 2 adds `rollout_evaluation.py` without changing either fitted model.
+It selects the first run of eight consecutive validation snapshots, initializes
+the origin from observed FIRMS centre detections, and then advances entirely
+with model-generated state. Metrics are recorded after 1, 2, 4, and 8 steps
+(12, 24, 48, and 96 hours).
+
+Each horizon is evaluated on that historical snapshot's rows with
+`firms_center_has_detection = 0`, matching the recursive frontier training
+contract. A labelled candidate cell that the recursive frontier fails to reach
+receives probability zero and can become a false negative. Model candidates
+outside the released snapshot's candidate domain are counted separately and
+remain unscored; they are never converted into false positives because the
+release provides no label or observation claim for those cells.
+
+Run and persist the diagnostic with:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m wildfire_data.rollout_evaluation \
+  --release releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22 \
+  --model-bundle artifacts/recursive-frontier-baseline-201db0d293c56f51/recursive_frontier_baseline.joblib \
+  --data-root data \
+  --output artifacts/recursive-frontier-baseline-201db0d293c56f51/open_loop_evaluation.json
+```
+
+The resulting weak-label metrics establish how quickly the current heuristic
+rollout degrades before any generated state is admitted to training.
