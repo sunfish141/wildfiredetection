@@ -238,9 +238,15 @@ This is an application baseline, not a newly trained multi-step model. The
 following transition behavior is deliberately heuristic and versioned:
 
 - intensity maps linearly from 305 K to 367 K synthetic TI4 brightness;
-- intensity maps to one through three synthetic detections;
-- synthetic evidence declares one provider-neutral observation stream rather
-  than inventing satellite-platform identities;
+- without calibration, intensity maps to one through three synthetic
+  detections and one provider-neutral observation stream;
+- renderer v2 optionally uses training-only, five-bin intensity calibration
+  for detection and platform counts (see below); platform diversity remains
+  a count proxy, because per-row platform identities are unavailable;
+- active state retains observation age, advances it by 12 hours per step,
+  and renders evidence only in the inclusive 3--24-hour eligibility window;
+- new ignitions use a configurable age of 7.5 hours, the midpoint of the
+  eligible acquisition ages [3, 12] within the preceding step;
 - active cells persist for two steps by default and retain 85% intensity per
   step;
 - the default deterministic ignition threshold is 0.05 (approximately 20.3%
@@ -312,3 +318,86 @@ PYTHONPATH=src .venv/bin/python -m wildfire_data.rollout_evaluation \
 
 The resulting weak-label metrics establish how quickly the current heuristic
 rollout degrades before any generated state is admitted to training.
+
+### One-step augmentation inspection
+
+Increment 3 adds `rollout_augmentation.py`, but still does not fit or overwrite
+a model. For each consecutive pair wholly inside the training split, it starts
+from observed FIRMS centre detections at the first snapshot, advances the
+current recursive model once, and derives the following predicted frontier.
+Synthetic feature rows are created only where that frontier intersects the
+next snapshot's no-centre historical candidate domain. The next snapshot's
+existing target is retained as supervised truth.
+
+Historical frontier cells the model did not reach and predicted candidates
+outside the historical domain remain manifest diagnostics. They are not
+silently discarded as successful predictions, converted to negative labels,
+or admitted to the generated CSV. The manifest compares synthetic and observed
+feature distributions and sets `training_admitted = false` so inspection is a
+required separate decision before retraining.
+
+The original v1 inspection is retained unchanged. Generate a **new** v2
+inspection directory with:
+
+```bash
+OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 PYTHONPATH=src .venv/bin/python -m wildfire_data.rollout_augmentation \
+  --release releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22 \
+  --model-bundle artifacts/recursive-frontier-baseline-201db0d293c56f51/recursive_frontier_baseline.joblib \
+  --data-root data \
+  --reference-manifest artifacts/recursive-frontier-baseline-201db0d293c56f51/one-step-augmentation/manifest.json \
+  --output artifacts/recursive-renderer-v2-201db0d293c56f51/one-step-augmentation
+```
+
+### Renderer v2 calibration and admission screen
+
+`recursive_calibration.py` fits mean observed centre detection and platform
+counts in five fixed equal-width intensity bins. It reads feature values only
+from `train` rows with centre detections, and uses the global training mean
+for an empty bin. The renderer rounds means half-up to integer counts.
+Neighbour platform-count proxies combine by maximum, bounded by three; this
+is not a reconstruction of satellite identities or overpass schedules.
+
+Observed initialization now requires the released centre observation age.
+It cannot substitute the new-ignition age for missing observed recency. Ages
+outside [3, 24] fail initialization, and surviving evidence ages past 24 hours
+become missing rendered observations even while the simulated cell remains
+active. The geometric frontier still uses active simulated cells. No new
+observation is inferred merely because a cell survives.
+
+The CLI verifies the release CSV checksum and row count, checks whole-snapshot
+chronological splits, and fits counts only on training observations. The model
+bundle's training snapshot boundary must match calibration. Augmentation
+rejects validation generation, missing splits, mixed snapshots, duplicate
+example IDs, and supplied sequences that differ from the source frame.
+
+The v2 inspection manifest retains the full renderer/scenario contract,
+calibration training snapshots and row count, release/model checksums, row
+lineage, pair coverage, class balance, missingness, means, standard deviations,
+and quartiles. Each generated row retains its original example ID, training
+split, cutoff, and target end; resolve its original evidence/label provenance
+through the checksum-pinned base release. An existing output directory is
+rejected, and only the final manifest denotes completion.
+
+Before examining v2 results, the engineering screen was fixed at a maximum
+10-percentage-point missingness gap and 0.5 observed standard deviations of
+mean or quartile difference for each of the seven FIRMS features. Empty
+comparisons fail. This is a training-distribution diagnostic, not an
+operational validation criterion. `training_admitted` remains false even if
+the screen passes; the next step would be a separate bounded, weighted
+scheduled-sampling experiment.
+
+Replay the exact inspected renderer with the unchanged classifier at the
+original validation origin:
+
+```bash
+OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 PYTHONPATH=src .venv/bin/python -m wildfire_data.rollout_evaluation \
+  --release releases/wildfire-spread-firms-feds-no-weather-2026-05-11_to_2026-08-22 \
+  --model-bundle artifacts/recursive-frontier-baseline-201db0d293c56f51/recursive_frontier_baseline.joblib \
+  --renderer-manifest artifacts/recursive-renderer-v2-201db0d293c56f51/one-step-augmentation/manifest.json \
+  --data-root data \
+  --output artifacts/recursive-renderer-v2-201db0d293c56f51/open_loop_evaluation.json
+```
+
+This comparison isolates renderer changes; it is not a scheduled-sampling
+fit. Original v1 artifacts remain historical results, and running current v2
+code without a calibration manifest does not reproduce their v1 semantics.

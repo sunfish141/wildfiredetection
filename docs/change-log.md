@@ -1,5 +1,23 @@
 # Change log
 
+## 2026-09-04
+
+- Added recursive renderer v2 observation age, 12-hour age advancement,
+  explicit new-ignition recency, and FIRMS availability/lookback eligibility.
+- Calibrated intensity-to-detection/platform counts from training centre
+  observations only, retaining a versioned contract and split provenance.
+- Hardened augmentation against validation generation and inconsistent
+  snapshot splits; added immutable publication, source checksums, renderer
+  distribution diagnostics, and exact-contract open-loop replay.
+- Regenerated the 157-pair training inspection as a separate artifact.
+  Its 32,044 matched rows still fail four of seven feature checks and remain
+  unadmitted. Recorded the evidence and remaining prerequisite in the
+  [renderer v2 report](recursive-renderer-v2.md) and handoff.
+- Replayed the same validation origin with the unchanged classifier. Improved
+  12-hour recall did not persist: 96-hour recall fell to zero and domain
+  coverage to 0.87%. Kept the experiment unpromoted and retraining gated.
+- Verified the complete 204-test suite and generated-row lineage.
+
 ## 2026-08-25
 
 - Adopted the historical-weather training contract: backfill the Open-Meteo

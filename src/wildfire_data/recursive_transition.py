@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ from .candidate_dataset import DEFAULT_CANDIDATE_RADIUS_CELLS, DEFAULT_MODEL_FEA
 from .training_grid import GridCell, cell_from_id, cell_from_wgs84, cells_in_square_radius
 
 
-RECURSIVE_TRANSITION_VERSION = "recursive-firms-compatible-transition/v1"
+RECURSIVE_TRANSITION_VERSION = "recursive-firms-compatible-transition/v2"
 RECURSIVE_MODEL_FEATURE_COLUMNS = tuple(
     name for name in DEFAULT_MODEL_FEATURE_COLUMNS if not name.startswith("firms_center_")
 )
@@ -44,10 +45,62 @@ DEFAULT_ACTIVE_DURATION_STEPS = 2
 DEFAULT_INTENSITY_RETENTION = 0.85
 SYNTHETIC_BRIGHTNESS_MIN_K = 305.0
 SYNTHETIC_BRIGHTNESS_MAX_K = 367.0
+OBSERVATION_LOOKBACK_HOURS = 24.0
+OBSERVATION_AVAILABILITY_LAG_HOURS = 3.0
+# A new ignition represents evidence acquired halfway through the eligible
+# portion of the preceding 12-hour step: ages [3, 12], midpoint 7.5 hours.
+DEFAULT_NEW_IGNITION_AGE_HOURS = 7.5
 
 
 class RecursiveTransitionError(ValueError):
     """Raised when a recursive state or model contract is invalid."""
+
+
+@dataclass(frozen=True)
+class SyntheticObservationCalibration:
+    """Training-only means in five equal-width intensity bins.
+
+    Platform counts are a proxy for stream diversity, not satellite identities.
+    Neighbouring cell proxies combine by maximum; no platform identities or
+    new overpasses are inferred.
+    """
+
+    detection_count_by_bin: tuple[float, ...]
+    platform_count_by_bin: tuple[float, ...]
+    training_row_count: int
+    training_snapshot_times: tuple[str, ...]
+    source_release_manifest_sha256: str
+    calibration_version: str = "training-center-intensity-bins/v1"
+
+    def __post_init__(self) -> None:
+        if self.calibration_version != "training-center-intensity-bins/v1":
+            raise RecursiveTransitionError("unsupported observation calibration version")
+        for name, upper in (("detection_count_by_bin", math.inf), ("platform_count_by_bin", 3)):
+            values = tuple(_finite(value, name) for value in getattr(self, name))
+            if len(values) != 5 or any(value < 1 or value > upper for value in values):
+                raise RecursiveTransitionError(f"{name} must contain five valid positive means")
+            object.__setattr__(self, name, values)
+        if (not isinstance(self.training_row_count, int) or isinstance(self.training_row_count, bool)
+                or self.training_row_count < 1 or not self.training_snapshot_times):
+            raise RecursiveTransitionError("calibration requires training provenance")
+        snapshots = tuple(self.training_snapshot_times)
+        if snapshots != tuple(sorted(set(snapshots))):
+            raise RecursiveTransitionError("calibration snapshots must be sorted and unique")
+        for value in snapshots:
+            if datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is None:
+                raise RecursiveTransitionError("calibration snapshots must have timezones")
+        object.__setattr__(self, "training_snapshot_times", snapshots)
+        digest = self.source_release_manifest_sha256
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise RecursiveTransitionError("calibration requires a release SHA-256")
+        if any(p > c for p, c in zip(self.platform_count_by_bin, self.detection_count_by_bin)):
+            raise RecursiveTransitionError("platform count cannot exceed detection count")
+
+    def counts(self, intensity: float) -> tuple[int, int]:
+        index = min(4, int(_unit_interval(intensity, "intensity") * 5))
+        detections = max(1, math.floor(self.detection_count_by_bin[index] + 0.5))
+        platforms = min(detections, max(1, math.floor(self.platform_count_by_bin[index] + 0.5)))
+        return detections, platforms
 
 
 @dataclass(frozen=True)
@@ -57,6 +110,7 @@ class ActiveFireCell:
     cell_id: str
     intensity: float
     remaining_active_steps: int
+    observation_age_hours: float = DEFAULT_NEW_IGNITION_AGE_HOURS
 
     def __post_init__(self) -> None:
         cell_from_id(self.cell_id)
@@ -68,6 +122,10 @@ class ActiveFireCell:
         ):
             raise RecursiveTransitionError("remaining_active_steps must be a positive integer")
         object.__setattr__(self, "intensity", intensity)
+        age = _finite(self.observation_age_hours, "observation_age_hours")
+        if age < 0:
+            raise RecursiveTransitionError("observation_age_hours must be non-negative")
+        object.__setattr__(self, "observation_age_hours", age)
 
 
 @dataclass(frozen=True)
@@ -130,6 +188,8 @@ class RecursiveTransitionModel:
         candidate_radius_cells: int = DEFAULT_CANDIDATE_RADIUS_CELLS,
         active_duration_steps: int = DEFAULT_ACTIVE_DURATION_STEPS,
         intensity_retention: float = DEFAULT_INTENSITY_RETENTION,
+        observation_calibration: SyntheticObservationCalibration | None = None,
+        new_ignition_age_hours: float = DEFAULT_NEW_IGNITION_AGE_HOURS,
     ) -> None:
         if not callable(getattr(estimator, "predict_proba", None)):
             raise RecursiveTransitionError("estimator must provide predict_proba")
@@ -157,11 +217,40 @@ class RecursiveTransitionModel:
         self.candidate_radius_cells = candidate_radius_cells
         self.active_duration_steps = active_duration_steps
         self.intensity_retention = _unit_interval(intensity_retention, "intensity_retention")
+        if observation_calibration is not None and not isinstance(
+            observation_calibration, SyntheticObservationCalibration
+        ):
+            raise RecursiveTransitionError("observation_calibration must be a calibration contract")
+        self.observation_calibration = observation_calibration
+        self.new_ignition_age_hours = _finite(new_ignition_age_hours, "new_ignition_age_hours")
+        if not OBSERVATION_AVAILABILITY_LAG_HOURS <= self.new_ignition_age_hours <= 12:
+            raise RecursiveTransitionError("new_ignition_age_hours must be between 3 and 12")
+
+    def transition_contract(self) -> dict[str, Any]:
+        """Serializable renderer and scenario parameters for reproducible runs."""
+        return {
+            "transition_version": RECURSIVE_TRANSITION_VERSION,
+            "time_step_hours": 12,
+            "ignition_threshold": self.ignition_threshold,
+            "candidate_radius_cells": self.candidate_radius_cells,
+            "active_duration_steps": self.active_duration_steps,
+            "intensity_retention": self.intensity_retention,
+            "intensity_and_persistence_are_learned": False,
+            "new_ignition_age_hours": self.new_ignition_age_hours,
+            "observation_lookback_hours": OBSERVATION_LOOKBACK_HOURS,
+            "observation_availability_lag_hours": OBSERVATION_AVAILABILITY_LAG_HOURS,
+            "platform_aggregation": "maximum-cell-count-proxy; identities unavailable",
+            "observation_calibration": (
+                asdict(self.observation_calibration) if self.observation_calibration else None
+            ),
+        }
 
     @classmethod
     def from_model_bundle(
         cls,
         path: str | Path,
+        *,
+        renderer_contract: Mapping[str, Any] | None = None,
         **parameters: Any,
     ) -> "RecursiveTransitionModel":
         """Load a trusted local tabular-baseline bundle.
@@ -178,17 +267,49 @@ class RecursiveTransitionModel:
         feature_columns = contract.get("feature_columns")
         if isinstance(feature_columns, str) or not isinstance(feature_columns, Sequence):
             raise RecursiveTransitionError("model bundle has no ordered feature list")
+        if renderer_contract is not None:
+            if parameters:
+                raise RecursiveTransitionError("cannot override a persisted renderer contract")
+            if (renderer_contract.get("transition_version") != RECURSIVE_TRANSITION_VERSION
+                    or renderer_contract.get("time_step_hours") != 12
+                    or renderer_contract.get("observation_lookback_hours") != OBSERVATION_LOOKBACK_HOURS
+                    or renderer_contract.get("observation_availability_lag_hours") != OBSERVATION_AVAILABILITY_LAG_HOURS):
+                raise RecursiveTransitionError("unsupported renderer contract")
+            parameters = {name: renderer_contract[name] for name in (
+                "ignition_threshold", "candidate_radius_cells", "active_duration_steps",
+                "intensity_retention", "new_ignition_age_hours",
+            )}
+            calibration = renderer_contract.get("observation_calibration")
+            parameters["observation_calibration"] = (
+                SyntheticObservationCalibration(**calibration) if calibration else None
+            )
+        calibration = parameters.get("observation_calibration")
+        if calibration is not None:
+            cutoff = contract.get("chronological_split_cutoff_at")
+            if (contract.get("split_group_column") != "source_snapshot_time"
+                    or not isinstance(cutoff, str)
+                    or datetime.fromisoformat(cutoff.replace("Z", "+00:00")) !=
+                    datetime.fromisoformat(calibration.training_snapshot_times[-1].replace("Z", "+00:00"))):
+                raise RecursiveTransitionError("model and calibration training snapshot boundary differ")
         return cls(bundle.get("model"), feature_columns=feature_columns, **parameters)
 
-    def initial_state(self, ignitions: Mapping[str, float]) -> RecursiveFireState:
+    def initial_state(
+        self, ignitions: Mapping[str, float], *, observation_ages: Mapping[str, float] | None = None
+    ) -> RecursiveFireState:
         """Create step zero from canonical cell IDs and slider intensities."""
         if not isinstance(ignitions, Mapping) or not ignitions:
             raise RecursiveTransitionError("ignitions must be a non-empty cell-to-intensity mapping")
+        if observation_ages is not None and set(observation_ages) != set(ignitions):
+            raise RecursiveTransitionError("observation ages must match ignition cell IDs")
         active = tuple(
             ActiveFireCell(
                 cell_id=cell_from_id(cell_id).cell_id,
                 intensity=intensity,
                 remaining_active_steps=self.active_duration_steps,
+                observation_age_hours=(
+                    observation_ages[cell_id] if observation_ages is not None
+                    else self.new_ignition_age_hours
+                ),
             )
             for cell_id, intensity in sorted(
                 ignitions.items(), key=lambda item: _cell_sort_key(cell_from_id(item[0]))
@@ -221,20 +342,11 @@ class RecursiveTransitionModel:
             raise TypeError("terrain_provider must be callable")
 
         active_by_id = {cell.cell_id: cell for cell in state.active_cells}
-        excluded = set(active_by_id).union(state.burned_cell_ids)
-        candidates: dict[str, GridCell] = {}
-        for active in state.active_cells:
-            for cell in cells_in_square_radius(
-                cell_from_id(active.cell_id), radius_cells=self.candidate_radius_cells
-            ):
-                if cell.cell_id not in excluded:
-                    candidates[cell.cell_id] = cell
-        ordered_candidates = tuple(sorted(candidates.values(), key=_cell_sort_key))
-
-        feature_rows = [
-            self._feature_row(cell, active_by_id=active_by_id, terrain_provider=terrain_provider)
-            for cell in ordered_candidates
-        ]
+        candidate_features = self.candidate_feature_rows(
+            state, terrain_provider=terrain_provider
+        )
+        ordered_candidates = tuple(item[0] for item in candidate_features)
+        feature_rows = [item[1] for item in candidate_features]
         probabilities = self._probabilities(feature_rows)
         predictions = []
         new_active = []
@@ -260,6 +372,7 @@ class RecursiveTransitionModel:
                         cell_id=cell.cell_id,
                         intensity=next_intensity,
                         remaining_active_steps=self.active_duration_steps,
+                        observation_age_hours=self.new_ignition_age_hours,
                     )
                 )
 
@@ -274,6 +387,7 @@ class RecursiveTransitionModel:
                         cell_id=active.cell_id,
                         intensity=active.intensity * self.intensity_retention,
                         remaining_active_steps=active.remaining_active_steps - 1,
+                        observation_age_hours=active.observation_age_hours + 12.0,
                     )
                 )
         next_active = tuple(
@@ -291,6 +405,54 @@ class RecursiveTransitionModel:
             predictions=tuple(predictions),
         )
 
+    def candidate_cells(self, state: RecursiveFireState) -> tuple[GridCell, ...]:
+        """Return the deterministic unburned frontier scored at ``state``."""
+        if not isinstance(state, RecursiveFireState):
+            raise TypeError("state must be a RecursiveFireState")
+        active_by_id = {cell.cell_id: cell for cell in state.active_cells}
+        excluded = set(active_by_id).union(state.burned_cell_ids)
+        candidates: dict[str, GridCell] = {}
+        for active in state.active_cells:
+            for cell in cells_in_square_radius(
+                cell_from_id(active.cell_id), radius_cells=self.candidate_radius_cells
+            ):
+                if cell.cell_id not in excluded:
+                    candidates[cell.cell_id] = cell
+        return tuple(sorted(candidates.values(), key=_cell_sort_key))
+
+    def candidate_feature_rows(
+        self,
+        state: RecursiveFireState,
+        *,
+        terrain_provider: TerrainProvider,
+        include_cell_ids: Iterable[str] | None = None,
+    ) -> tuple[tuple[GridCell, dict[str, float | None]], ...]:
+        """Build model features for the inference frontier or a subset of it.
+
+        ``include_cell_ids`` filters the already-derived frontier. IDs outside
+        the frontier are ignored rather than turned into synthetic examples;
+        this lets dataset aggregation intersect predictions with an existing
+        historical label domain without changing inference behavior.
+        """
+        if not isinstance(state, RecursiveFireState):
+            raise TypeError("state must be a RecursiveFireState")
+        if not callable(terrain_provider):
+            raise TypeError("terrain_provider must be callable")
+        included = None
+        if include_cell_ids is not None:
+            included = {cell_from_id(cell_id).cell_id for cell_id in include_cell_ids}
+        active_by_id = {cell.cell_id: cell for cell in state.active_cells}
+        return tuple(
+            (
+                cell,
+                self._feature_row(
+                    cell, active_by_id=active_by_id, terrain_provider=terrain_provider
+                ),
+            )
+            for cell in self.candidate_cells(state)
+            if included is None or cell.cell_id in included
+        )
+
     def _feature_row(
         self,
         cell: GridCell,
@@ -302,8 +464,15 @@ class RecursiveTransitionModel:
             active_by_id[neighbour.cell_id]
             for neighbour in cells_in_square_radius(cell, radius_cells=1)
             if neighbour.cell_id in active_by_id
+            and OBSERVATION_AVAILABILITY_LAG_HOURS
+            <= active_by_id[neighbour.cell_id].observation_age_hours
+            <= OBSERVATION_LOOKBACK_HOURS
         ]
-        local_counts = [_synthetic_detection_count(active.intensity) for active in nearby]
+        local_counts = [
+            self.observation_calibration.counts(active.intensity)[0]
+            if self.observation_calibration else _synthetic_detection_count(active.intensity)
+            for active in nearby
+        ]
         local_brightness = [_synthetic_brightness(active.intensity) for active in nearby]
         total_count = sum(local_counts)
         if total_count:
@@ -318,10 +487,13 @@ class RecursiveTransitionModel:
             "firms_local_3x3_detection_count": float(total_count),
             "firms_local_3x3_bright_ti4_max": max(local_brightness) if nearby else None,
             "firms_local_3x3_bright_ti4_mean": weighted_brightness,
-            # Synthetic evidence is one provider-neutral observation stream,
-            # rather than a fabricated count of satellite platforms.
-            "firms_local_3x3_platform_count": float(bool(nearby)),
-            "firms_local_3x3_hours_since_last_detection": 0.0 if nearby else None,
+            "firms_local_3x3_platform_count": float(max(
+                (self.observation_calibration.counts(active.intensity)[1]
+                 if self.observation_calibration else 1 for active in nearby), default=0
+            )),
+            "firms_local_3x3_hours_since_last_detection": (
+                min(active.observation_age_hours for active in nearby) if nearby else None
+            ),
             "firms_local_3x3_active_cell_count": float(len(nearby)),
             **_terrain_features(terrain_provider(cell.cell_id)),
         }

@@ -12,10 +12,13 @@ latitude/longitude. The active first proof of concept uses FIRMS and terrain
 without weather; retrospective weather and issued forecasts remain separate
 future experiments.
 
-The repository has a completed **no-weather weak-label candidate dataset**,
-not a trained operational binary spread predictor. It contains FIRMS-supported
-weak positives and explicit weak-negative proxies; do not describe it as a
-weather-aware forecast or a verified clear/no-burn dataset.
+The repository has a completed **no-weather weak-label candidate dataset**, a
+verified one-step tabular baseline, and an experimental recursive frontier
+baseline. The recursive model can advance synthetic fire state, but its
+generated states have not been admitted to training and its open-loop quality
+degrades sharply after the first step. None of these artifacts is an
+operational predictor, a weather-aware forecast, or a verified clear/no-burn
+dataset.
 
 ## Settled decisions
 
@@ -30,6 +33,7 @@ weather-aware forecast or a verified clear/no-burn dataset.
 | Static feature | Sample retained ETOPO elevation, slope, and aspect at the 1 km cell centre. NALCMS is source evidence only, not a feature yet. |
 | Weather | The active 2026-05-11 through 2026-08-22 POC deliberately does not collect, join, or train on weather. Its rows retain explicit unavailable/missing declarations. After the POC is verified, a separate candidate view may backfill Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values at FIRMS-seeded tiles and UTC hourly anchors as `historical_analysis`; it is not a reconstructed issued forecast. The optional Single Runs collector remains a separate operational experiment. |
 | First model | A simple `HistGradientBoostingClassifier` tabular baseline after a valid binary candidate table exists. It is intentionally not a spatial deep-learning cube. |
+| Recursive experiment | A separate no-centre frontier classifier consumes seven synthetic/observed 3×3 FIRMS-like fields plus six terrain fields. Twelve-hour state recursion is explicit and heuristic until future fire-state targets are learned. |
 | Evaluation split | Chronological and grouped by FEDS `source_snapshot_time`, so all cells from one source snapshot stay on one side of holdout. Never randomly split neighboring cells or source snapshots. |
 | Storage | The complete `data/` tree is hard-capped at 20,000,000,000 bytes. Existing files are counted and never silently evicted. |
 
@@ -110,6 +114,42 @@ chronological notebook baseline, is [documented separately](no-weather-poc.md).
   `artifacts/tabular-baseline-201db0d293c56f51/`. On 89,210 validation rows,
   it obtained ROC-AUC 0.9163 and PR-AUC 0.5408. These are weak-label POC
   metrics, not operational performance claims.
+- The separate recursive frontier baseline is persisted under
+  `artifacts/recursive-frontier-baseline-201db0d293c56f51/`. It excludes all
+  centre-detection features and trains only on rows with
+  `firms_center_has_detection = 0`. On 78,598 chronological validation rows it
+  obtained ROC-AUC 0.9101, PR-AUC 0.4653, and Brier score 0.0429.
+- The 203 source-snapshot transitions form five gap-safe temporal sequences of
+  1, 5, 13, 9, and 175 snapshots. Missing FEDS observation windows split a
+  sequence; weak-negative rows retain missing observation identity rather than
+  being promoted to observed negatives.
+- The persisted open-loop evaluation starts from 455 observed validation
+  active cells. Frontier-domain coverage falls from 29.0% at 12 hours to 3.3%
+  at 96 hours; recall falls from 35.4% to 2.3%, while candidates outside the
+  historical label domain grow from 5,979 to 28,058. This is recorded in
+  `artifacts/recursive-frontier-baseline-201db0d293c56f51/open_loop_evaluation.json`.
+- The training-only one-step augmentation inspection processed 157 consecutive
+  snapshot pairs and published 34,249 matched synthetic rows, including 3,968
+  positives. It covers 11.6% of the historical frontier and 37.8% of its
+  positives, while 770,659 model candidates lie outside the corresponding
+  historical frontier. Its manifest deliberately declares
+  `training_admitted = false`.
+- The separate **renderer v2** inspection is now complete under
+  `artifacts/recursive-renderer-v2-201db0d293c56f51/one-step-augmentation/`.
+  It calibrates counts on 34,462 observed centre rows from the 162 training
+  snapshots, preserves observed age, advances ages by 12 hours, and excludes
+  evidence outside the 3--24-hour window. It generated **32,044** matched rows
+  (**2,619** positives) across the same 157 training pairs. Frontier coverage
+  is **10.85%**, positive-frontier coverage **24.92%**, and 761,097 candidates
+  lie outside the historical frontier. Four of seven renderer feature checks
+  fail; `training_admitted` remains **false**. See the
+  [renderer experiment report](recursive-renderer-v2.md).
+- Exact-contract v2 open-loop replay is persisted at
+  `artifacts/recursive-renderer-v2-201db0d293c56f51/open_loop_evaluation.json`.
+  With the same classifier, origin, 455 active cells, and evaluation domains,
+  12-hour recall rises from 35.4% to 82.1%, but 96-hour recall drops from 2.3%
+  to 0%, and 96-hour domain coverage from 3.34% to 0.87%. This experiment is
+  **not promoted** and does not justify a scheduled-sampling fit.
 
 ### Implemented code
 
@@ -124,44 +164,87 @@ chronological notebook baseline, is [documented separately](no-weather-poc.md).
 | `candidate_sampling.py` / `candidate_dataset.py` / `build_candidate_dataset.py` | Deterministic FIRMS-supported weak candidates, cutoff-safe features, atomic candidate manifest, and unscored-positive diagnostics. |
 | `export_candidate_dataset.py` | Self-contained gzip CSV/JSONL upload release with schema, inventory, and SHA-256 checksums. |
 | `tabular_baseline.py` | Leakage-gated chronological tabular trainer, metrics, calibration, and persisted feature contract. |
+| `recursive_transition.py` / `train_recursive_transition.py` | Synthetic FIRMS-compatible cell state, deterministic 12-hour transitions, and the separately persisted no-centre frontier classifier. |
+| `recursive_calibration.py` | Training-only intensity-to-count calibration, snapshot split checks, and versioned calibration provenance. |
+| `rollout_sequences.py` | Gap-safe temporal grouping that preserves whole FEDS source snapshots and cell-specific cutoffs. |
+| `rollout_evaluation.py` | Fixed-origin, fully open-loop validation at 12, 24, 48, and 96 hours without inventing labels outside the released candidate domain. |
+| `rollout_augmentation.py` | Training-only one-step synthetic-state generation, matched-domain coverage diagnostics, feature-distribution comparison, and an explicit training-admission guard. |
 
-The test suite covers the candidate build, source-range refusal, manifest
-selection, release checksums, and chunk merge behavior. Run it again after any
-source or policy change.
+The 204-test suite covers collection/build contracts, the candidate release,
+both tabular baselines, recursive transitions, sequence gaps, open-loop
+evaluation, age eligibility, calibration isolation/replay, and guarded
+augmentation persistence. Run it again after any
+source, state-transition, feature, or policy change.
 
 ## Remaining work before a credible operational predictor
 
-### 1. Candidate source and weak-negative policy
+### 1. Resolve remaining renderer drift before retraining
 
-The first candidate source is now **FIRMS-only**. It matches the intended
-predictor input and avoids requiring a FEDS perimeter at inference.
-`candidate_sampling.py` expands a deterministic square radius around each
-FIRMS detection that was available at the candidate cell's local-solar aligned
-cutoff. Exact FEDS-positive cells inside that support retain target=1; capped
-non-positive cells retain target=0 only as `weak_negative_proxy`, with the
-explicit `unobserved-no-clear-no-burn-mask` observability state. A positive
-outside FIRMS support is retained as `unscored-positive-no-firms-candidate`,
-not discarded or relabeled.
+The requested first correction is implemented and the guarded augmentation
+has been regenerated. Both the original v1 inspection and the new v2
+inspection remain unadmitted. The original v1 comparison showed:
 
-The sampler expands an eligible FIRMS seed into a bounded incident context.
-It deliberately retains FEDS positives without that support as unscored rather
-than silently treating them as no-spread cases.
+- synthetic 3×3 detection count averages 1.22 versus 4.38 in matched observed
+  rows;
+- synthetic hours since last detection is always 0 versus an observed mean of
+  15.8 hours; and
+- synthetic platform count averages 0.45 versus 1.03 observed.
 
-### 2. Define valid target=0 / observation handling
+Renderer v2 carries observed age through initialization, advances it by 12
+hours per step, and assigns new ignitions an explicit 7.5-hour age (the
+midpoint of eligible acquisition ages [3, 12] in the preceding step). Five
+fixed intensity bins calibrate detection/platform counts from training centre
+observations only. Release and model checksums, calibration, scenario
+parameters, cutoffs, and original row IDs are retained; a new output path is
+required. Validation augmentation and inconsistent snapshot splits are rejected.
 
-The default prototype radius is 2 km and proxy cap is 2,000 cells per FEDS
-snapshot. Both are explicit sampler inputs recorded in the completed
-candidate-view manifest. The policy does *not* claim a verified
-clear/no-burn negative; paired VIIRS observation cutouts remain necessary for
-that stronger label.
+In the v2 matched cohort, synthetic/observed means are 1.99/3.46 detections,
+12.52/15.90 hours since detection, and 0.47/0.90 platforms. The screen still
+fails brightness max/mean, recency, and platform count, including a
+12.66-percentage-point missingness gap. Positive-frontier coverage declined
+from 37.75% to 24.92%. Count calibration and explicit age alone do not solve
+the state-distribution mismatch.
 
-The completed view publishes candidate features and source lineage atomically.
-It can now be passed to `train_tabular_baseline` with the manifest feature
-allowlist and `split_group_column="source_snapshot_time"`. Any resulting
-score remains a weak-label experiment until paired observation coverage and
-independent validation are added.
+The next experiment should address brightness/observation-history loss,
+platform-diversity approximation, and frontier support. The current slider
+clips brightness to 305--367 K and decays it with simulated intensity; counts
+are conditional means, and platform identities are not retained in the
+released row aggregates. Those remain explicit heuristics, not future-state
+targets. Do not relax the screen or admit rows merely to obtain a fit.
+The fixed-origin replay also fails the multi-step comparison despite improved
+12-hour scores. The next retraining and application prerequisites remain unmet.
 
-### 3. Backfill historical weather; optionally capture issued forecasts
+### 2. Run one controlled scheduled-sampling fit
+
+Only after the renderer comparison is acceptable, publish a new immutable
+mixed training view containing the original observed frontier rows plus a
+bounded, explicitly weighted subset of synthetic rows. Never modify the base
+candidate release or current model bundle in place, and never generate
+augmentation from validation snapshots.
+
+Fit a new model artifact, then rerun the same fixed-origin open-loop evaluation
+at 12, 24, 48, and 96 hours. Compare it directly with
+`open_loop_evaluation.json`; do not promote the new model if one-step metrics
+improve while multi-step coverage, drift, or outside-domain expansion worsens.
+
+### 3. Add incident- and region-held-out evaluation
+
+The current upload release retains `contributing_fire_count` but not a durable
+per-row FEDS incident identity. Preserve or derive a versioned incident key
+before incident-held-out training. Then report later-time, held-incident, and
+held-region results in addition to the chronological snapshot holdout. Treat
+FEDS/FIRMS dependence as a weak-label limitation; do not present these scores
+as independent ground truth.
+
+### 4. Improve observation handling and valid target=0 evidence
+
+The completed FIRMS-only candidate policy and weak-negative proxy contract do
+not need to be redesigned before the next experiment. They still do *not*
+establish a verified no-fire label. Collect paired VIIRS fire-mask/QA and
+matching geolocation cutouts before claiming observation-aware negatives, and
+keep cloudy, missing, partial, or unprocessed areas unknown.
+
+### 5. Backfill historical weather; optionally capture issued forecasts
 
 After the no-weather 2026-05-11 through 2026-08-22 POC is complete, turn its
 FIRMS-seeded candidate cells into compact weather tiles, then retrieve hourly
@@ -184,20 +267,21 @@ candidate-cell/tile mappings and preserves the
 response establishes availability at its response time, not at model
 initialization time. Retain wind as U/V components in either feature mode.
 
-### 4. Improve observations and static features
+### 6. Improve static and operational-context features
 
-- Collect paired VIIRS fire-mask/QA **and matching geolocation** cutouts before
-  claiming observation-aware no-fire labels.
 - Define target-grid categorical compaction for NALCMS (for example class
   fractions or mode); never average categorical IDs.
 - Add fuel moisture, drought/soil moisture, water, roads, and suppression
   context only with versioned spatial/time semantics and a storage admission.
 
-### 5. Strengthen validation
+### 7. Build the interactive inference application
 
-Use later-time, held-incident, and held-region evaluation. Treat FEDS/FIRMS
-dependence as a weak-label limitation; do not present a FEDS-trained/
-FIRMS-featured score as independent ground truth.
+After a recursive model passes the controlled comparison, add the application
+wrapper that accepts either a user ignition or current FIRMS detections, maps
+them to canonical 1 km cells, samples terrain, advances versioned 12-hour
+state, and emits cell probabilities/centroids for the map. The interface must
+retain scenario parameters and label recursive results as experimental
+simulation output.
 
 ## Commands to resume safely
 

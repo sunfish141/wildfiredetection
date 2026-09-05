@@ -69,6 +69,7 @@ class RolloutEvaluationTests(unittest.TestCase):
                         "target_newly_burned_12h": label,
                         "firms_center_has_detection": detected,
                         "firms_center_bright_ti4_max": brightness,
+                        "firms_center_hours_since_last_detection": 11.0 if detected else None,
                     }
                 )
         return pd.DataFrame(rows)
@@ -105,6 +106,15 @@ class RolloutEvaluationTests(unittest.TestCase):
 
         self.assertEqual(len(state.active_cells), 1)
         self.assertEqual(state.active_cells[0].intensity, 1.0)
+        self.assertEqual(state.active_cells[0].observation_age_hours, 11.0)
+
+    def test_observed_initialization_rejects_missing_and_unavailable_recency(self):
+        examples = self._examples().iloc[:4].copy()
+        for age in (None, float("inf"), 2.9, 24.1):
+            with self.subTest(age=age):
+                examples.loc[0, "firms_center_hours_since_last_detection"] = age
+                with self.assertRaisesRegex(RolloutEvaluationError, "ages"):
+                    initial_state_from_observed_firms(self._model(), examples)
 
     def test_finds_first_long_enough_split_run(self):
         examples = self._examples(snapshot_count=4)

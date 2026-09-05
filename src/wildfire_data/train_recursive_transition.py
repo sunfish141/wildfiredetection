@@ -19,6 +19,7 @@ from .recursive_transition import (
     DEFAULT_INTENSITY_RETENTION,
     RECURSIVE_MODEL_FEATURE_COLUMNS,
     RECURSIVE_TRANSITION_VERSION,
+    RecursiveTransitionModel,
 )
 from .tabular_baseline import (
     TabularBaselineError,
@@ -110,6 +111,9 @@ def train_release(
         basename="recursive_frontier_baseline",
     )
     transition_contract = {
+        **RecursiveTransitionModel(
+            trained.baseline.model, feature_columns=RECURSIVE_MODEL_FEATURE_COLUMNS
+        ).transition_contract(),
         "schema_version": 1,
         "transition_version": RECURSIVE_TRANSITION_VERSION,
         "time_step_hours": 12,

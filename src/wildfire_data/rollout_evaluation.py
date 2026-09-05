@@ -26,11 +26,14 @@ from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_s
 from .recursive_transition import (
     SYNTHETIC_BRIGHTNESS_MAX_K,
     SYNTHETIC_BRIGHTNESS_MIN_K,
+    OBSERVATION_AVAILABILITY_LAG_HOURS,
+    OBSERVATION_LOOKBACK_HOURS,
     RecursiveFireState,
     RecursiveTransitionModel,
 )
 from .rollout_sequences import RolloutSequence, build_rollout_sequences, snapshot_frame
 from .terrain_features import TerrainFeatureSampler
+from .train_recursive_transition import _sha256_file, _verify_candidate_checksum
 
 
 ROLLOUT_EVALUATION_VERSION = "recursive-open-loop-evaluation/v1"
@@ -45,6 +48,7 @@ REQUIRED_COLUMNS = (
     "target_newly_burned_12h",
     "firms_center_has_detection",
     "firms_center_bright_ti4_max",
+    "firms_center_hours_since_last_detection",
 )
 
 
@@ -88,6 +92,7 @@ class OpenLoopEvaluation:
     origin_source_snapshot_time: str
     initial_active_cell_count: int
     horizons: tuple[RolloutHorizonMetrics, ...]
+    transition_contract: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         document = asdict(self)
@@ -130,7 +135,7 @@ def evaluate_open_loop(
     for snapshot in selected_snapshots:
         frame = snapshot_frame(examples, snapshot)
         split_values = set(frame["dataset_split"].dropna().astype(str))
-        if split_values != {split_name}:
+        if frame["dataset_split"].isna().any() or split_values != {split_name}:
             raise RolloutEvaluationError(
                 "every rollout snapshot must belong entirely to the requested split"
             )
@@ -160,6 +165,7 @@ def evaluate_open_loop(
         origin_source_snapshot_time=_format_timestamp(selected_snapshots[0].source_snapshot_time),
         initial_active_cell_count=initial_active_count,
         horizons=tuple(metrics),
+        transition_contract=model.transition_contract(),
     )
 
 
@@ -167,7 +173,8 @@ def initial_state_from_observed_firms(
     model: RecursiveTransitionModel, snapshot_examples: pd.DataFrame
 ) -> RecursiveFireState:
     """Convert observed centre detections into the recursive slider state."""
-    required = {"cell_id", "firms_center_has_detection", "firms_center_bright_ti4_max"}
+    required = {"cell_id", "firms_center_has_detection", "firms_center_bright_ti4_max",
+                "firms_center_hours_since_last_detection"}
     missing = sorted(required - set(snapshot_examples.columns))
     if missing:
         raise RolloutEvaluationError(
@@ -182,11 +189,18 @@ def initial_state_from_observed_firms(
     brightness = pd.to_numeric(detected["firms_center_bright_ti4_max"], errors="raise")
     if brightness.isna().any() or not np.isfinite(brightness.to_numpy(dtype=float)).all():
         raise RolloutEvaluationError("observed FIRMS centre brightness must be finite")
+    ages = pd.to_numeric(detected["firms_center_hours_since_last_detection"], errors="raise")
+    if not ages.between(OBSERVATION_AVAILABILITY_LAG_HOURS, OBSERVATION_LOOKBACK_HOURS).all():
+        raise RolloutEvaluationError("observed FIRMS ages must be within the 3--24 hour policy")
+    if not detected["cell_id"].is_unique:
+        raise RolloutEvaluationError("observed FIRMS cell IDs must be unique")
     ignitions = {
         str(cell_id): _intensity_from_brightness(value)
         for cell_id, value in zip(detected["cell_id"], brightness, strict=True)
     }
-    return model.initial_state(ignitions)
+    return model.initial_state(
+        ignitions, observation_ages=dict(zip(detected["cell_id"].astype(str), ages, strict=True))
+    )
 
 
 def first_split_origin(
@@ -328,13 +342,26 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model-bundle", required=True, type=Path)
     parser.add_argument("--data-root", default=Path("data"), type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--renderer-manifest", type=Path,
+                        help="Use the exact renderer contract from a completed augmentation inspection")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
+    if args.output.exists():
+        raise RolloutEvaluationError("output already exists; use a new evaluation path")
     candidate_path = args.release / "candidate_examples.csv.gz"
+    release_manifest_path = args.release / "dataset_manifest.json"
+    release_manifest = json.loads(release_manifest_path.read_text())
+    if (release_manifest.get("kind") != "wildfire-spread-candidate-dataset-release"
+            or release_manifest.get("schema_version") != 2
+            or release_manifest.get("weather", {}).get("available") is not False):
+        raise RolloutEvaluationError("requires a completed schema-v2 no-weather release")
+    _verify_candidate_checksum(args.release, candidate_path)
     examples = pd.read_csv(candidate_path, compression="gzip", usecols=list(REQUIRED_COLUMNS))
+    if len(examples) != release_manifest.get("candidate_row_count"):
+        raise RolloutEvaluationError("candidate row count differs from release manifest")
     sequences = build_rollout_sequences(examples)
     sequence, start_index = first_split_origin(
         examples,
@@ -342,7 +369,18 @@ def main() -> None:
         split_name="validation",
         required_snapshot_count=max(DEFAULT_HORIZONS),
     )
-    model = RecursiveTransitionModel.from_model_bundle(args.model_bundle)
+    renderer_contract = None
+    if args.renderer_manifest:
+        renderer_manifest = json.loads(args.renderer_manifest.read_text())
+        if (renderer_manifest.get("kind") != "wildfire-one-step-rollout-augmentation"
+                or renderer_manifest.get("split_name") != "train"
+                or renderer_manifest.get("source_release_manifest_sha256") != _sha256_file(release_manifest_path)
+                or renderer_manifest.get("source_model_bundle_sha256") != _sha256_file(args.model_bundle)):
+            raise RolloutEvaluationError("renderer manifest does not match source release/model")
+        renderer_contract = renderer_manifest["transition_contract"]
+    model = RecursiveTransitionModel.from_model_bundle(
+        args.model_bundle, renderer_contract=renderer_contract
+    )
     terrain = TerrainFeatureSampler(args.data_root, max_cached_blocks=8)
     evaluation = evaluate_open_loop(
         model,
@@ -352,6 +390,11 @@ def main() -> None:
         terrain_provider=terrain.sample_cell,
     )
     document = evaluation.as_dict()
+    document["source_release_manifest_sha256"] = _sha256_file(release_manifest_path)
+    document["source_model_bundle_sha256"] = _sha256_file(args.model_bundle)
+    document["renderer_manifest_sha256"] = (
+        _sha256_file(args.renderer_manifest) if args.renderer_manifest else None
+    )
     _atomic_json(args.output, document)
     print(json.dumps(document, indent=2, sort_keys=True))
 
