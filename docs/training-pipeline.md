@@ -401,3 +401,20 @@ OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 PYTHONPATH=src .venv/bin/python -m wild
 This comparison isolates renderer changes; it is not a scheduled-sampling
 fit. Original v1 artifacts remain historical results, and running current v2
 code without a calibration manifest does not reproduce their v1 semantics.
+
+### Incident sequences and two-pass scheduled sampling
+
+The subsequent [incident experiment](incident-scheduled-sampling.md) implements
+the supervised sequence strategy: establish complete incident/region/later-time
+partitions, fit an observed one-step classifier, mix observed and generated
+state during training-only rollouts, then fit a second classifier on a bounded
+weighted view. Both models receive separate probability calibration and
+identical fully open-loop evaluation at 12, 24, 48, and 96 hours.
+
+Use the completed incident manifest at
+`artifacts/incident-sequences-v1-201db0d293c56f51-halo/manifest.json` and the
+two-pass run at `artifacts/incident-two-pass-v1-201db0d293c56f51/`. This separate
+research view does not reuse or change the previous failed augmentation
+artifacts. Its results remain mixed and no model is promoted. The linked
+guide defines the incident keys, spatial/temporal exclusions, feature halo,
+mixing/weight policy, state bounds, metrics, limitations, and commands.

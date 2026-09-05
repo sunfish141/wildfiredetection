@@ -1,5 +1,42 @@
 # Change log
 
+## 2026-09-05
+
+- Removed the web app's 96-hour playback stop and FIRMS zoom, response-size,
+  and cell-count restrictions. Default fetching now matches the notebook's
+  full collection extent. Added streamed cell aggregation, display-only
+  marker grouping, an expanding timeline, and rolling 128-frame history.
+  Regression tests cover large states and continuous long-horizon playback.
+- Verified 233 tests and browser continuation to 144 hours. A live full-region
+  FIRMS fetch returned 2,445 eligible detections in 1,006 cells in 1.92 seconds.
+
+- Added Wildfire Atlas, a FastAPI/Leaflet map app for intensity-based fire
+  placement, current FIRMS initialization, adjustable 12-hour playback,
+  immediate pause, timeline history, and cell inspection. The saved incident
+  model supplies actual predictions through stateless endpoints.
+- Added bounded server-side FIRMS previews with three-feed validation,
+  observation-age filtering, credential-safe errors, and a short memory cache.
+  Documented app setup, controls, and model limits in the [web guide](web-app.md).
+- Verified all 230 tests, desktop/mobile browser interactions, pause during an
+  in-flight prediction, and a successful live three-feed FIRMS request.
+
+- Built versioned FEDS incident-complex associations and gap-safe sequence
+  manifests, with whole-incident, region, feature-halo, and later-time holdouts
+  established before fitting or augmentation.
+- Added observed FIRMS aggregate preservation, bounded adjacent-cell
+  transitions, explicit extinction/persistence, and scheduled state mixing.
+- Fitted a two-pass supervised baseline: 3,266 observed frontier rows, then
+  447 synthetic rows weighted at 0.25. Calibrated probabilities using 329 rows
+  from six separate calibration complexes. Preserved immutable source/model
+  checksums and verified weighted row lineage before the second fit.
+- Evaluated both models completely open-loop at 12/24/48/96 hours on identical
+  held-incident, held-region, and later-time cases. Published accuracy,
+  precision/recall, area error, front distance, coverage and unknown-domain
+  diagnostics. Results are mixed; neither model is promoted.
+- Verified both persisted bundles in a fresh process, audited data isolation
+  and lineage, and expanded the suite to 221 tests. See the
+  [incident experiment report](incident-scheduled-sampling.md).
+
 ## 2026-09-04
 
 - Added recursive renderer v2 observation age, 12-hour age advancement,

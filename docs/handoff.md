@@ -13,10 +13,11 @@ without weather; retrospective weather and issued forecasts remain separate
 future experiments.
 
 The repository has a completed **no-weather weak-label candidate dataset**, a
-verified one-step tabular baseline, and an experimental recursive frontier
-baseline. The recursive model can advance synthetic fire state, but its
-generated states have not been admitted to training and its open-loop quality
-degrades sharply after the first step. None of these artifacts is an
+verified one-step tabular baseline, experimental recursive frontier models,
+and a completed **incident-sequence two-pass scheduled-sampling experiment**.
+A new bounded, weighted synthetic view has been admitted to that research
+fit; the earlier failed renderer augmentation artifacts remain unadmitted.
+Open-loop results remain mixed and no recursive model is promoted. None of these artifacts is an
 operational predictor, a weather-aware forecast, or a verified clear/no-burn
 dataset.
 
@@ -34,7 +35,7 @@ dataset.
 | Weather | The active 2026-05-11 through 2026-08-22 POC deliberately does not collect, join, or train on weather. Its rows retain explicit unavailable/missing declarations. After the POC is verified, a separate candidate view may backfill Open-Meteo Historical Weather API ECMWF IFS (`ecmwf_ifs`) values at FIRMS-seeded tiles and UTC hourly anchors as `historical_analysis`; it is not a reconstructed issued forecast. The optional Single Runs collector remains a separate operational experiment. |
 | First model | A simple `HistGradientBoostingClassifier` tabular baseline after a valid binary candidate table exists. It is intentionally not a spatial deep-learning cube. |
 | Recursive experiment | A separate no-centre frontier classifier consumes seven synthetic/observed 3×3 FIRMS-like fields plus six terrain fields. Twelve-hour state recursion is explicit and heuristic until future fire-state targets are learned. |
-| Evaluation split | Chronological and grouped by FEDS `source_snapshot_time`, so all cells from one source snapshot stay on one side of holdout. Never randomly split neighboring cells or source snapshots. |
+| Evaluation split | Original tabular baselines group chronological holdout by FEDS `source_snapshot_time`. The incident experiment assigns whole spatially separated FEDS complexes before fitting, with region holdouts, a region feature halo, and a later-time test period. All cells from one incident snapshot stay together. Never randomly split neighboring cells. |
 | Storage | The complete `data/` tree is hard-capped at 20,000,000,000 bytes. Existing files are counted and never silently evicted. |
 
 The binding rationale is in [ADR 0001](adr/0001-bounded-20gb-local-dataset.md)
@@ -82,6 +83,21 @@ chronological notebook baseline, is [documented separately](no-weather-poc.md).
    before the cutoff, with a valid time after that availability time.
 
 ## What is complete and verified
+
+### Interactive product
+
+- Added the [Wildfire Atlas FastAPI app](web-app.md): click-to-place intensity
+  seeds or current FIRMS loading, 12-hour predictions, 1/3/5/10-second
+  playback, pause, single-step, timeline history, and clickable cell inspection.
+- The app uses the saved incident pass-2 model and retained terrain, keeping
+  calibration and rollout bounds unchanged. It is an explicitly experimental
+  preview with no playback time limit, not a model promotion. The rolling
+  timeline retains 128 frames while the current state retains its full burned
+  mask. FIRMS loading defaults to the notebook's full collection rectangle,
+  with streaming 1 km aggregation and no zoom/cell-count restriction.
+- FIRMS keys stay server-side; bounded previews require valid responses from
+  all three VIIRS feeds and preserve the 3–24-hour observation window.
+  Browser state and transient previews do not modify source/training archives.
 
 ### Source evidence and derived data
 
@@ -149,7 +165,28 @@ chronological notebook baseline, is [documented separately](no-weather-poc.md).
   With the same classifier, origin, 455 active cells, and evaluation domains,
   12-hour recall rises from 35.4% to 82.1%, but 96-hour recall drops from 2.3%
   to 0%, and 96-hour domain coverage from 3.34% to 0.87%. This experiment is
-  **not promoted** and does not justify a scheduled-sampling fit.
+  **not promoted**; its generated rows remain unadmitted for training.
+- The subsequent, separately versioned incident experiment is complete at
+  `artifacts/incident-sequences-v1-201db0d293c56f51-halo/manifest.json` and
+  `artifacts/incident-two-pass-v1-201db0d293c56f51/run_manifest.json`.
+  Current FEDS geometry associates 78,154 candidates into 243 conservative
+  incident complexes; 350,502 candidates, including 53 weak positives, remain
+  explicitly unassigned. Whole-incident, region, and later-time splits are
+  established before fitting or augmentation. The region check includes the
+  3×3 feature halo.
+- Pass 1 fits 3,266 observed frontier rows; pass 2 adds 447 synthetic rows
+  (247 positives) at weight 0.25. Both use separate sigmoid probability
+  calibration on 329 frontier rows from six calibration complexes. Generated
+  rows come only from training fragments, with predicted-state fractions
+  increasing from 0.25 to 0.50 to 0.75. The earlier failed augmentation views
+  are not inputs to this fit and their admission flags remain unchanged.
+- Both passes have fully open-loop 12/24/48/96-hour evaluations on identical
+  origins: 9 held-incident, 21 held-region, and 65 later-time fragments.
+  Reports include accuracy, spatial precision/recall, coverage, cumulative
+  new-burned-area error, and front distance with empty-front diagnostics.
+  Results are mixed, with 22 metric regressions beyond 12 hours; neither model
+  is promoted. See the [incident experiment report](incident-scheduled-sampling.md)
+  for results, scope, artifact checks, and reproducible commands.
 
 ### Implemented code
 
@@ -169,72 +206,64 @@ chronological notebook baseline, is [documented separately](no-weather-poc.md).
 | `rollout_sequences.py` | Gap-safe temporal grouping that preserves whole FEDS source snapshots and cell-specific cutoffs. |
 | `rollout_evaluation.py` | Fixed-origin, fully open-loop validation at 12, 24, 48, and 96 hours without inventing labels outside the released candidate domain. |
 | `rollout_augmentation.py` | Training-only one-step synthetic-state generation, matched-domain coverage diagnostics, feature-distribution comparison, and an explicit training-admission guard. |
+| `incident_sequences.py` | Versioned FEDS complex association, whole-incident/region/later-time partitions, and gap-safe incident sequence manifests. |
+| `incident_transition.py` | Preserved observed FIRMS aggregates, scheduled observation/prediction mixing, calibrated estimator bundles, and bounded frontier/persistence rules. |
+| `scheduled_sampling.py` | Two supervised fits, training-only bounded weighted augmentation, separate probability calibration, immutable training views, and verified model loading. |
+| `incident_evaluation.py` | Fully open-loop per-incident 12/24/48/96-hour spatial, area, front-distance, and probability metrics. |
 
-The 204-test suite covers collection/build contracts, the candidate release,
+The 233-test suite covers collection/build contracts, the candidate release,
 both tabular baselines, recursive transitions, sequence gaps, open-loop
 evaluation, age eligibility, calibration isolation/replay, and guarded
-augmentation persistence. Run it again after any
+augmentation persistence, plus incident grouping/splits, feature halos,
+scheduled sampling, mixed-view checksums/lineage, and spatial metrics. Run it again after any
 source, state-transition, feature, or policy change.
 
 ## Remaining work before a credible operational predictor
 
-### 1. Resolve remaining renderer drift before retraining
+### 1. Improve future fire-state dynamics
 
-The requested first correction is implemented and the guarded augmentation
-has been regenerated. Both the original v1 inspection and the new v2
-inspection remain unadmitted. The original v1 comparison showed:
+The incident renderer now preserves observed centre counts, maximum/mean
+brightness, platform counts, and recency. Simulated intensity decay no longer
+rewrites historical brightness. This corrects part of the earlier renderer
+loss, but future brightness, persistence/extinction, and platform diversity
+still use explicit heuristics. Learn or improve those state targets from
+training sequences; do not interpret observation absence as proof of no burn.
 
-- synthetic 3×3 detection count averages 1.22 versus 4.38 in matched observed
-  rows;
-- synthetic hours since last detection is always 0 versus an observed mean of
-  15.8 hours; and
-- synthetic platform count averages 0.45 versus 1.03 observed.
+The two-pass model still loses most frontier coverage by 96 hours. Examine
+state extinction, observation expiry, and candidate support before adding
+model complexity. Keep the first 1,414.2 m step-distance bound, burned mask,
+probability calibration, and candidate/growth caps versioned in each run.
 
-Renderer v2 carries observed age through initialization, advances it by 12
-hours per step, and assigns new ignitions an explicit 7.5-hour age (the
-midpoint of eligible acquisition ages [3, 12] in the preceding step). Five
-fixed intensity bins calibrate detection/platform counts from training centre
-observations only. Release and model checksums, calibration, scenario
-parameters, cutoffs, and original row IDs are retained; a new output path is
-required. Validation augmentation and inconsistent snapshot splits are rejected.
+### 2. Improve the controlled dataset-aggregation experiment
 
-In the v2 matched cohort, synthetic/observed means are 1.99/3.46 detections,
-12.52/15.90 hours since detection, and 0.47/0.90 platforms. The screen still
-fails brightness max/mean, recency, and platform count, including a
-12.66-percentage-point missingness gap. Positive-frontier coverage declined
-from 37.75% to 24.92%. Count calibration and explicit age alone do not solve
-the state-distribution mismatch.
+The requested two-pass scheduled-sampling baseline is implemented and fitted.
+Its new mixed view was admitted only for a bounded research comparison, with
+renderer drift retained as a diagnostic; this supersedes the previous plan
+to postpone every fit until the old renderer screen passed. The old failed
+inspection artifacts remain unadmitted and immutable.
 
-The next experiment should address brightness/observation-history loss,
-platform-diversity approximation, and frontier support. The current slider
-clips brightness to 305--367 K and decays it with simulated intensity; counts
-are conditional means, and platform identities are not retained in the
-released row aggregates. Those remain explicit heuristics, not future-state
-targets. Do not relax the screen or admit rows merely to obtain a fit.
-The fixed-origin replay also fails the multi-step comparison despite improved
-12-hour scores. The next retraining and application prerequisites remain unmet.
+Further small rounds or changes to mixing/growth controls should be selected
+using internal training development splits. Preserve the complete incident,
+region, and later-time exclusions; never generate training rows from them.
+Compare fully open-loop cases at all four horizons and do not promote a
+model based on a one-step improvement alone. Both current fits remain
+research artifacts with mixed multi-step results.
 
-### 2. Run one controlled scheduled-sampling fit
+### 3. Strengthen incident identity and sequence coverage
 
-Only after the renderer comparison is acceptable, publish a new immutable
-mixed training view containing the original observed frontier rows plus a
-bounded, explicitly weighted subset of synthetic rows. Never modify the base
-candidate release or current model bundle in place, and never generate
-augmentation from validation snapshots.
+The original upload release stays unchanged; a checksum-pinned sidecar now
+supplies versioned FEDS incident-complex identities and partitions. The keys
+and conservative spatial grouping protect known neighbouring fire context,
+but are not an independent operational incident crosswalk. Validate identity
+across provider merges and longer periods, and recover fuller observed
+sequences without inventing missing-window zero labels.
 
-Fit a new model artifact, then rerun the same fixed-origin open-loop evaluation
-at 12, 24, 48, and 96 hours. Compare it directly with
-`open_loop_evaluation.json`; do not promote the new model if one-step metrics
-improve while multi-step coverage, drift, or outside-domain expansion worsens.
-
-### 3. Add incident- and region-held-out evaluation
-
-The current upload release retains `contributing_fire_count` but not a durable
-per-row FEDS incident identity. Preserve or derive a versioned incident key
-before incident-held-out training. Then report later-time, held-incident, and
-held-region results in addition to the chronological snapshot holdout. Treat
-FEDS/FIRMS dependence as a weak-label limitation; do not present these scores
-as independent ground truth.
+Only 45 complexes remain in training under the current strict split, and
+calibration uses six. Area/front metrics are restricted to released weak-label
+domains, with outside-domain and empty-front diagnostics. The later-time
+period was withheld from this experiment's fitting but was used by earlier
+chronological research; a future prospective period is still needed for a
+pristine final test. FEDS/FIRMS dependence remains a weak-label limitation.
 
 ### 4. Improve observation handling and valid target=0 evidence
 
@@ -274,14 +303,15 @@ initialization time. Retain wind as U/V components in either feature mode.
 - Add fuel moisture, drought/soil moisture, water, roads, and suppression
   context only with versioned spatial/time semantics and a storage admission.
 
-### 7. Build the interactive inference application
+### 7. Extend the completed interactive application
 
-After a recursive model passes the controlled comparison, add the application
-wrapper that accepts either a user ignition or current FIRMS detections, maps
-them to canonical 1 km cells, samples terrain, advances versioned 12-hour
-state, and emits cell probabilities/centroids for the map. The interface must
-retain scenario parameters and label recursive results as experimental
-simulation output.
+The user authorized building the application as a research preview before
+model promotion. The [FastAPI map app](web-app.md) now implements placed
+ignitions and current FIRMS initialization, terrain sampling, 12-hour model
+steps, playback/pause, history, and cell inspection. All four requested product
+flows are complete. Further product work can add portable scenario save/load
+and richer perimeter rendering; model promotion still depends on stronger
+held-out rollout evidence.
 
 ## Commands to resume safely
 

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#172421">
+  <title>Wildfire Atlas · Spread explorer</title>
+  <link rel="stylesheet" href="/static/vendor/leaflet.css">
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/vendor/leaflet.js"></script>
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Wildfire Atlas home"><span class="brand-icon">◈</span><span>Wildfire <strong>Atlas</strong><small>SPREAD EXPLORER</small></span></a>
+    <div class="header-meta"><span class="live-dot"></span> RESEARCH PREVIEW <span class="header-divider">/</span> NORTH AMERICA</div>
+    <button id="help" class="quiet-button" aria-label="Show instructions">How it works <span>↗</span></button>
+  </header>
+  <main class="workspace">
+    <aside class="sidebar" aria-label="Scenario controls">
+      <div class="section-heading"><span class="eyebrow">YOUR WORKSPACE</span><span class="version">01</span></div>
+      <h1>A spark.<br> A possible future.</h1>
+      <p class="intro">Explore how a fire could spread, one twelve-hour step at a time.</p>
+      <div class="tabs" role="group" aria-label="Starting state source">
+        <button id="place-tab" class="tab selected" aria-pressed="true">Place a fire</button>
+        <button id="firms-tab" class="tab" aria-pressed="false">FIRMS detections</button>
+      </div>
+      <section id="place-panel">
+        <div class="label-row"><label for="intensity">Starting intensity</label><output id="intensity-value" for="intensity">70%</output></div>
+        <input id="intensity" type="range" min="0" max="100" value="70" step="5">
+        <div class="range-labels"><span>Low</span><span>High</span></div>
+        <button id="place" class="primary-button" disabled><span>+</span> Place on map</button>
+        <p class="hint" id="placement-hint">Choose an intensity, then click the map to add a starting fire.</p>
+        <details class="coordinates"><summary>Place by coordinates</summary><div class="coordinate-fields"><label>Latitude<input id="latitude" type="number" min="24" max="84" step="0.0001" value="53.02"></label><label>Longitude<input id="longitude" type="number" min="-179" max="-50" step="0.0001" value="-117.31"></label></div><button id="coordinate-place" class="secondary-button" disabled>Add fire here</button></details>
+      </section>
+      <section id="firms-panel" hidden>
+        <p class="panel-copy">Start with NASA satellite detections across North America or in your map view.</p>
+        <label class="firms-scope" for="firms-scope">Fetch area<select id="firms-scope"><option value="all">All North America</option><option value="view">Visible map area</option></select></label>
+        <button id="load-firms" class="primary-button" disabled>↓ Load current FIRMS</button>
+        <p class="hint">Uses observations 3–24 hours old across three VIIRS satellites. Nearby detections combine into 1 km cells. Loading replaces this scenario.</p>
+      </section>
+      <div class="sidebar-divider"></div>
+      <div class="label-row"><h2>Scenario overview</h2><span id="state-badge" class="badge">READY</span></div>
+      <div class="stats"><div><strong id="active-count">0</strong><span>Active cells</span></div><div><strong id="burned-count">0</strong><span>Burned cells</span></div></div>
+      <div class="scenario-detail"><span>Simulated time</span><strong id="elapsed">+0 hours</strong></div>
+      <div class="scenario-detail"><span>New ignitions</span><strong id="new-count">—</strong></div>
+      <div class="scenario-detail"><span>Grid resolution</span><strong>1 km² / cell</strong></div>
+      <div class="sidebar-divider"></div>
+      <div class="label-row"><h2>Map layers</h2><span class="eyebrow">VISIBILITY</span></div>
+      <label class="layer-toggle"><span><i class="legend-dot active"></i>Active fire</span><input id="show-active" type="checkbox" checked></label>
+      <label class="layer-toggle"><span><i class="legend-dot burned"></i>Burned cells</span><input id="show-burned" type="checkbox" checked></label>
+      <label class="layer-toggle"><span><i class="legend-dot candidate"></i>Spread candidates</span><input id="show-candidates" type="checkbox"></label>
+      <div class="sidebar-footer"><span class="model-dot"></span><div><strong id="model-name">Loading model…</strong><p>No weather inputs · experimental spread</p></div></div>
+    </aside>
+    <section class="map-workspace" aria-label="Interactive fire map">
+      <div id="map" aria-label="Map: click to place or inspect fire cells"></div>
+      <div class="map-title"><span class="live-dot"></span><span id="map-title">JASPER REGION, ALBERTA</span><span class="map-title-divider">|</span><span id="map-coordinates">53.020° N · 117.310° W</span></div>
+      <button id="fit" class="map-button" aria-label="Fit map to fire cells"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="10" cy="10" r="6"/><circle cx="10" cy="10" r="2"/><path d="M10 0v4m0 12v4M0 10h4m12 0h4"/></svg><span>Fit fires</span></button>
+      <div id="map-instruction" class="map-instruction">Start a scenario with a fire or current satellite detections.</div>
+      <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+      <section id="inspector" class="inspector" aria-label="Selected fire cell" hidden>
+        <div class="label-row"><span class="eyebrow">CELL INSPECTOR</span><button id="close-inspector" class="icon-button" aria-label="Close cell inspector">×</button></div>
+        <h2 id="point-title">Active fire</h2><p id="point-location" class="point-location"></p>
+        <dl id="point-details"></dl><code id="point-id"></code>
+      </section>
+      <div class="map-caption"><span>EXPLORE, THEN INSPECT</span><span>Click any cell to pause and see its details.</span></div>
+      <section class="playback" aria-label="Simulation playback">
+        <div class="playback-top"><div class="label-row timeline-title"><span id="timeline-heading" class="eyebrow">SIMULATION TIMELINE</span><strong id="valid-time">Place a fire to begin</strong></div><button id="reset" class="reset-button" disabled>↺ Reset scenario</button></div>
+        <div class="timeline"><input id="timeline" type="range" min="0" max="1" value="0" step="1" disabled aria-label="Inspect a simulated 12-hour step"><div class="timeline-labels"><span>Start</span><span></span><span></span><span></span><span></span></div></div>
+        <div class="playback-bottom"><div class="transport"><button id="play" class="play-button" disabled>▶ <span>Play</span></button><button id="step" class="step-button" disabled aria-label="Advance twelve hours">+12 h <span>→</span></button></div><label class="speed-label" for="speed">One 12 h step every <select id="speed"><option value="1">1 sec</option><option value="3" selected>3 sec</option><option value="5">5 sec</option><option value="10">10 sec</option></select></label><span id="playback-state" class="playback-state">PAUSED</span></div>
+      </section>
+    </section>
+  </main>
+  <dialog id="help-dialog"><button id="close-help" class="icon-button" aria-label="Close instructions">×</button><span class="eyebrow">GETTING STARTED</span><h2>Follow a possible fire.</h2><ol><li>Place one or more fires at your chosen intensity, or load current FIRMS observations across North America or the visible map area.</li><li>Press Play to advance in 12-hour steps with no time limit. Change playback speed, pause, or take a single step.</li><li>Click a cell to pause and inspect it. The timeline retains the latest 128 steps; the current state keeps the complete burned-cell mask.</li></ol><p>Each point represents a 1 km² cell. Intensity is a scenario scale, not fire radiative power. The research model uses satellite-like fire state and terrain; persistence is heuristic and weather is not included. It is not an operational fire forecast.</p></dialog>
+</body>
+</html>

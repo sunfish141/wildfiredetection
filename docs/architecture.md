@@ -24,6 +24,17 @@ The planned package layout places environment configuration in config/.env, pinn
 
 ## Current repository implementation
 
+The local [Wildfire Atlas web app](web-app.md) adds `web_app.py` as a FastAPI
+entry point and `web/` as a static Leaflet frontend. Browser history owns each
+scenario; stateless seed/step endpoints wrap the retained incident model.
+Model inference and cached ETOPO sampling are serialized in worker threads.
+`live_firms.py` provides bounded, transient observations from three VIIRS feeds
+using server-held credentials. Full-region CSV streams aggregate directly to
+1 km cells; display-only grouping keeps dense maps manageable. Playback has
+no fixed horizon, and the browser retains a rolling 128-frame history while
+preserving the full current burned-cell mask. Preview data and scenarios do not mutate the
+collection archive, release, or fitted models.
+
 The repository implements the collection foundation, bounded-storage policy,
 FEDS satellite-weak labels, WFIGS reference-perimeter and CWFIS
 incident-context collectors, a CMR-first VIIRS inventory collector, compact

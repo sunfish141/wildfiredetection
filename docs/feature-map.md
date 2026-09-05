@@ -1,5 +1,17 @@
 # Feature and label map
 
+## Interactive spread explorer
+
+The [FastAPI web app](web-app.md) maps user-placed intensity seeds or current
+FIRMS observations onto the existing 1 km grid. It provides 12-hour model
+steps, adjustable play/pause, saved-step inspection, and active/burned/candidate
+map layers. The inspector shows state and available probabilities for each
+cell. FIRMS loading preserves observed aggregates and the 3–24-hour eligibility
+window. Full notebook-region FIRMS loading works at any zoom; dense map
+markers group for display while inference retains the individual 1 km cells.
+Playback has no time limit, with a rolling 128-step inspection timeline and
+the full current burned mask. No new model features or training labels are introduced.
+
 ## First-model contract
 
 Each row represents one canonical 1 km North America Albers equal-area cell

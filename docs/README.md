@@ -1,5 +1,9 @@
 # Wildfire Detection Starter
 
+The interactive **Wildfire Atlas** FastAPI app supports fire placement,
+current FIRMS loading, adjustable playback, and point inspection.
+See [Web app setup and controls](web-app.md) to run it locally.
+
 This workspace contains a Jupyter notebook for pulling near-real-time fire detections from the NASA FIRMS API. It also defines two weather paths: a retrospective Open-Meteo Historical Weather API backfill for training analysis and an optional live Open-Meteo Single Runs capture for issued-forecast research. The active proof of concept deliberately defers both weather paths. Each successful FIRMS collection archives the exact unfiltered response and writes a lossless normalized record set. The source archive retains every FIRMS field, so a later model can choose a different threshold or feature set without recollecting.
 
 ## Spread-forecasting data contract
@@ -20,6 +24,7 @@ The U.S./Canada collection and training contract is documented in:
 - [Uploadable candidate dataset](uploadable-dataset.md)
 - [No-weather May 11–Aug 22 proof of concept](no-weather-poc.md)
 - [Pipeline handoff](handoff.md)
+- [Incident sequences and two-pass scheduled sampling](incident-scheduled-sampling.md)
 - [20 GB local-dataset decision](adr/0001-bounded-20gb-local-dataset.md)
 - [1 km / 12-hour weak-label-baseline decision](adr/0002-first-1km-12hour-weak-label-baseline.md)
 - [Change log](change-log.md)
